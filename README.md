@@ -1,0 +1,88 @@
+# pure
+
+ただ、書く。macOS と iOS のための静かな Markdown エディターです。
+
+Tauri v2 / SolidJS / TypeScript / CodeMirror 6。トップには記事のタイトルとタグを最終編集日の新しい順に並べます。記事画面はツールバーや常設サイドバーを持ちません。
+
+## 起動
+
+Node.js 22.12 以上を使用します。
+
+```sh
+npm install
+npm run dev
+```
+
+`http://localhost:1420` でブラウザ版を開けます。文章・画像は IndexedDB に保持します。ブラウザのサイトデータを削除すると消えるため、普段の執筆にはネイティブ版を使用してください。
+
+macOS アプリには Rust 1.90 以上と Xcode Command Line Tools が必要です。実行対象は macOS 14.5 以降 / iOS 17.5 以降です。
+
+```sh
+npm run tauri dev
+npm run tauri build
+```
+
+iOS は macOS 上の Xcode と Apple の開発署名を使用します。初回に Xcode プロジェクトを生成し、署名チームを設定してください。
+
+```sh
+npm run tauri ios init
+npm run tauri ios dev
+npm run tauri ios build
+```
+
+## 使い方
+
+| 操作 | ショートカット |
+| --- | --- |
+| ノート検索・新規作成 | ⌘ K / ⌘ P |
+| すぐに新しい記事を書く | ⌘ N |
+| 現在の記事を削除 | ⌘ ⇧ Delete |
+| 設定 | ⌘ , |
+| 今すぐローカル保存 | ⌘ S |
+| パレットを閉じる | Esc |
+| リンク・タグを開く | ⌘ クリック / タップ |
+
+iPhone では右下の「···」、または左端からのスワイプでノート一覧を開きます。パレットで名前を入力し「つくる」を選ぶと新しいノートになります。`#タグ` で絞り込み、通常の検索語と組み合わせられます。
+
+- `[ページ名]` は標準の `[ページ名](ページ名.md)` として保存します。日本語・空白を含むパスは URL エンコードします。
+- `[https://example.com]` は通常の Markdown リンクとして保存します。
+- コード、画像、既存リンク、タスクのチェックボックスは変換しません。別名やタイトル付きのリンクはそのまま保ちます。
+- 最初の `# 見出し` が記事タイトルになります。見出しの `#` は画面から隠します。ファイル名はタイトル変更後も維持するため、ほかの記事からの参照を壊しません。
+- YouTube / Vimeo の URL を貼ると動画を表示し、元のリンクを隠します。動画の行へカーソルを戻すと記法を編集できます。`- [URL]` の箇条書きや通常の Markdown リンク、URL 単独の行にも対応します。
+- 画像を貼り付けるかドラッグすると、長辺 1600 以下・品質 0.85 の WebP に変換して選択した画像フォルダに保存します。画像がある行からカーソルを移すと記法を隠します。ファイル・Clipboard items・HTML の data URL・macOS の画像クリップボードに対応します。
+- 入力が止まって 2 秒後に保存します。移動・終了時にも保存し、入力中の文章を回復用ジャーナルに保持します。
+- 記事削除はローカルの `.trash/` に内容を残します。削除直後の通知の「元に戻す」から復元できます。
+
+ネイティブ版の YouTube は、動画を表示するときだけ `127.0.0.1` のランダムポートに専用の HTML 配信を起動します。WebKit のカスタムスキームで失われる HTTP Referer を補うためです。この配信は動画 ID を受け取るだけで、ノートや設定ファイルへのアクセス機能はありません。
+
+## 保存と R2
+
+初期保存先はアプリデータ内の `Documents/Notes`、画像はその中の `assets` です。macOS では設定から **Markdown と画像のフォルダを別々に選べます**。実ファイルには両フォルダの位置に合わせた相対 URL を書き出すため、ほかの Markdown アプリでも画像を参照できます。画像フォルダだけを変更した場合、既存画像をコピーして記事内の参照を更新します。元の画像はそのまま残します。iOS はサンドボックス内に保存します。
+
+設定で Cloudflare R2 の **S3 API エンドポイント**（`https://<account-id>.r2.cloudflarestorage.com`）、バケット、読み書き権限の Access Key ID / Secret Access Key を入力します。同期用の専用バケットを推奨します。Secret Access Key は macOS / iOS の Keychain に保持し、ノートや設定 JSON には書き込みません。通信はネイティブ HTTP と AWS Signature V4 を使うため CORS 設定は不要です。
+
+`_sync.json` に各ファイルの相対パス・Unix ミリ秒の更新時刻・SHA-256 を保持します。起動、前面への復帰、接続復帰、保存後に差分を同期します。オンライン中は 1 分ごとにも再試行します。ローカル保存はネットワークを待ちません。
+
+同期済みのハッシュを `_sync-state.json` に保持し、両端末で編集された場合はローカル版を `名前 (conflict 日時-ID).md` に残します。R2 への書込みはオブジェクトとインデックスの ETag を条件にして競合を検出し、取得内容の SHA-256 も検証します。R2 内の `_pure/objects/<sha256>` に確定した内容の不変コピーを保持し、ファイルとインデックスの書込みの間でアプリが終了しても復元できるようにします。この領域は手動で削除しないでください。アプリ内での削除はインデックスに削除履歴を残し、ほかの端末にも伝えます。削除された記事の以前の内容は復元用に保持されます。画像のパスは同期時に `assets/` に正規化するので、端末ごとの保存先の違いを吸収します。
+
+同じバケットをほかのアプリから変更する場合も `_sync.json` の更新が必要です。バケット認証情報がない状態の検証では、実サービスへの疎通は確認できません。
+
+## 見た目の調整
+
+- `src/styles/tokens.css`：色、文字サイズ、行間、字間、紙の余白。
+- `src/styles/typography.css`：游明朝と Times New Roman の混植。欧文の `size-adjust` はこのファイルで変更します。
+- `src/styles/layout.css`：配置とパレット、画像・動画。
+
+CodeMirror の独自スタイルも外部 CSS にまとめています。Tailwind と `EditorView.theme()` は使用していません。配色は白地、黒文字、リンク `#1c1bd8` に固定しています。本文は [stone の参照記事](https://stone-type.jp/tebiki/542/) に合わせて 14〜15px 相当、行間 2、字間 0.04em に設定しています。
+
+## 検証
+
+```sh
+npm test
+npm run build
+npx playwright install chromium
+npm run test:e2e
+```
+
+技術仕様の参照：[Tauri FS](https://v2.tauri.app/plugin/file-system/)、[Persisted Scope](https://v2.tauri.app/plugin/persisted-scope/)、[CodeMirror Decorations](https://codemirror.net/examples/decoration/)、[R2 S3 API](https://developers.cloudflare.com/r2/api/s3/api/)。
+# pure-editor
