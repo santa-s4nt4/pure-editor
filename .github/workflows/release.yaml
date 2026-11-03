@@ -64,6 +64,12 @@ jobs:
             npm run tauri ios init -- --ci
           fi
 
+      # ios init で生成された Xcode のアイコンにも、配布元画像を反映します。
+      - name: Apply pure app icons to iOS project
+        run: |
+          npm run tauri icon -- public/pure.png
+          cmp src-tauri/icons/ios/AppIcon-512@2x.png src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png
+
       - name: Build Unsigned iOS IPA
         run: |
           # Tauri CLI が Xcode の Rust ビルドフェーズ向け設定サーバーを提供します。
