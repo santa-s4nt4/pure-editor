@@ -6,6 +6,7 @@ import { fetch as nativeFetch } from '@tauri-apps/plugin-http';
 import { AwsClient } from 'aws4fetch';
 import { extractTags, fromMarkdown, noteTitle, pagePath, toMarkdown } from './transformer';
 import { filenameTitle, namedNotePath, noteId, renameNoteLinks } from './note-filenames';
+import { isPaperPath, type PaperNotebook } from './paper-notebook';
 import { diskImagePaths } from './image-paths';
 
 export interface Settings {
@@ -248,6 +249,8 @@ export async function relocateImages(previous: Settings, next: Settings) {
 
 /** ローカル書込みは直列化。ネットワークの待機中も入力・保存を止めない。 */
 export class StorageManager {
+  private paper: PaperNotebook | undefined;
+  setPaperNotebook(paper: PaperNotebook) { this.paper = paper; }
   private manifest = emptyManifest();
   private aliases: Record<string, string> = Object.create(null);
   resolvePath(path: string): string {
@@ -319,12 +322,14 @@ export class StorageManager {
       const note = { path, title: noteTitle(text, filenameTitle(path)), tags: extractTags(text), excerpt: text.replace(/^#+\s+/gm, '').replace(/\n/g, ' ').slice(0, 100), updatedAt: entry.updatedAt };
       this.noteCache.set(path, { hash: entry.sha256, note }); notes.push(note);
     }
+    if (this.paper) notes.push(...await this.paper.listNotes());
     notes.sort((a, b) => b.updatedAt - a.updatedAt || a.path.localeCompare(b.path, 'ja'));
     this.titlePaths = new Map([...notes].reverse().map(note => [note.title, note.path]));
     return notes;
   }
   private editorText(text: string) { return fromMarkdown(text, (label, path) => this.titlePaths.get(label) === this.resolvePath(path)); }
   async readNote(path: string) {
+    if (isPaperPath(path)) return this.paper?.readNote(path) ?? null;
     await this.queue;
     path = this.resolvePath(path);
     await this.listNotes();
@@ -332,6 +337,7 @@ export class StorageManager {
     return bytes ? this.editorText(decoder.decode(bytes)) : null;
   }
   async deleteNote(path: string): Promise<string> {
+    if (isPaperPath(path)) throw new Error('Paper 文書の削除は Dropbox 側で行ってください。');
     path = this.resolvePath(path);
     safeRelativePath(path);
     if (!path.endsWith('.md')) throw new Error('記事を選択してください。');
@@ -353,6 +359,7 @@ export class StorageManager {
     await this.saveBytes(path, bytes);
   }
   async saveNote(path: string, text: string, expectedText?: string) {
+    if (isPaperPath(path)) { if (!this.paper) throw new Error('Paper の保存先がありません。'); await this.paper.saveNote(path, text, expectedText); return; }
     path = this.resolvePath(path);
     safeRelativePath(path);
     await this.listNotes();
@@ -387,6 +394,7 @@ export class StorageManager {
     if (moves.size) { this.emit({ type: 'files' }); void this.sync(); }
   }
   async saveNamedNote(path: string, text: string, expectedText?: string): Promise<string> {
+    if (isPaperPath(path)) { await this.saveNote(path, text, expectedText); return path; }
     path = this.resolvePath(path);
     await this.saveNote(path, text, expectedText);
     const id = noteId(path) ?? (await sha256(encoder.encode(`pure-note:${path}`))).slice(0, 32);

@@ -233,3 +233,17 @@ it('大文字小文字だけの変更でAPFS上の同じファイルを削除し
   expect(await backend.read(path)).not.toBeNull();
   expect(await manager.readNote(path)).toBe('# title');
 });
+it('Paperは自動改名やR2へ送らず、同じ.paperの名前のまま読み書きする', async () => {
+  const { manager, backend } = await setup();
+  const { PaperNotebook } = await import('../src/lib/paper-notebook');
+  const notebook = new PaperNotebook(backend, null);
+  manager.setPaperNotebook(notebook);
+  const path = await notebook.attach({ file: { id: 'id:work-doc', name: '決まった名前.paper' }, revision: 3, markdown: '# 題名' });
+  expect(await manager.saveNamedNote(path, '# 新しい題名', '# 題名')).toBe(path);
+  await manager.migrateNoteNames();
+  expect((await manager.listNotes())[0].path).toBe(path);
+  expect(await manager.readNote(path)).toBe('# 新しい題名');
+  await expect(manager.deleteNote(path)).rejects.toThrow('Dropbox 側');
+  const remote = new MemoryRemote(); manager.setRemote(remote); await manager.sync();
+  expect([...remote.objects.keys()].some(key => key.includes('.paper') || key.includes('新しい題名'))).toBe(false);
+});

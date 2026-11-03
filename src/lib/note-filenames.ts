@@ -10,7 +10,7 @@ export function namedNotePath(title: string, id: string, previous = '') {
   return `${folder}${stem}--${id}.md`;
 }
 export function filenameTitle(path: string) {
-  return path.split('/').pop()!.replace(suffix, '').replace(/\.md$/i, '') || '無題';
+  return path.split('/').pop()!.replace(suffix, '').replace(/\.(?:md|paper)$/i, '') || '無題';
 }
 
 /** Rewrite local Markdown destinations, preserving code, labels and URL fragments. */
