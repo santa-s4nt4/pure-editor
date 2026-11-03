@@ -163,3 +163,73 @@ describe('ローカル保存と差分同期', () => {
     expect(() => parseManifest(encode('{"version":2,"files":{}}'))).toThrow();
   });
 });
+
+it('同じ題名で作成しても別ファイルになり、保存時のタイトル変更でIDは維持する', async () => {
+  const { manager, backend } = await setup();
+  const a = await manager.createNote('無題'); const b = await manager.createNote('無題');
+  expect(a).not.toBe(b);
+  const renamed = await manager.saveNamedNote(a, '# 朝の記録\n本文');
+  expect(renamed).toMatch(/^朝の記録--[a-f0-9]{32}\.md$/);
+  expect(renamed.slice(-35)).toBe(a.slice(-35));
+  expect(await backend.read(a)).toBeNull();
+  expect(await manager.readNote(a)).toBe('# 朝の記録\n本文');
+  const back = await manager.saveNamedNote(renamed, '# 無題\n続き', '# 朝の記録\n本文');
+  expect(back).toBe(a);
+  expect(await manager.readNote(renamed)).toBe('# 無題\n続き');
+  expect((await manager.listNotes()).length).toBe(2);
+});
+it('既存記事はバックアップと更新日を保って移行し、リンク・画像・同期先も移す', async () => {
+  const remote = new MemoryRemote();
+  const { manager, backend } = await setup();
+  await manager.saveNote('old.md', '# 記事\n![](assets/photo.webp)');
+  await manager.saveNote('source.md', '# 参照元\n[記事](old.md)');
+  const before = (await manager.listNotes()).find(note => note.path === 'old.md')!.updatedAt;
+  await manager.migrateNoteNames();
+  const notes = await manager.listNotes();
+  const target = notes.find(note => note.title === '記事')!;
+  expect(target.path).toMatch(/^記事--[a-f0-9]{32}\.md$/);
+  expect(target.updatedAt).toBe(before);
+  expect(await backend.read('old.md')).toBeNull();
+  expect([...backend.files.keys()].some(path => path.startsWith('.trash/renamed-') && path.endsWith('/old.md'))).toBe(true);
+  const source = notes.find(note => note.title === '参照元')!;
+  expect(decode((await backend.read(source.path))!)).toContain(encodeURIComponent(target.path));
+  expect(await manager.readNote('old.md')).toContain('![](assets/photo.webp)');
+  await manager.migrateNoteNames(); expect(await manager.listNotes()).toEqual(notes);
+  manager.setRemote(remote); await manager.sync();
+  const other = await setup(remote); await other.manager.sync();
+  expect((await other.manager.listNotes()).map(note => note.path).sort()).toEqual(notes.map(note => note.path).sort());
+  const restarted = new StorageManager(backend); await restarted.initialize();
+  expect(await restarted.readNote('old.md')).toContain('# 記事');
+});
+it('両端末の同じ旧パスは同じ移行先を使い、異なる移行先があると上書きしない', async () => {
+  const a = await setup(); const b = await setup();
+  await a.manager.saveNote('old.md', '# 題名'); await b.manager.saveNote('old.md', '# 題名');
+  await a.manager.migrateNoteNames(); await b.manager.migrateNoteNames();
+  expect((await a.manager.listNotes())[0].path).toBe((await b.manager.listNotes())[0].path);
+  const c = await setup();
+  await c.manager.saveNote('old.md', '# 題名');
+  const target = (await a.manager.listNotes())[0].path;
+  await c.manager.saveNote(target, '既存の別の文章');
+  await expect(c.manager.migrateNoteNames()).rejects.toThrow('移行先');
+  expect(await c.manager.readNote('old.md')).toBe('# 題名');
+  expect(await c.manager.readNote(target)).toBe('既存の別の文章');
+});
+it('移行途中の書き込み失敗では原本を残し、次回の移行で完了できる', async () => {
+  const { manager, backend } = await setup();
+  await manager.saveNote('old.md', '# 題名');
+  const write = backend.write.bind(backend); let fail = true;
+  backend.write = async (path, bytes) => { if (fail && path === '_note-renames.json') { fail = false; throw new Error('disk full'); } await write(path, bytes); };
+  await expect(manager.migrateNoteNames()).rejects.toThrow('disk full');
+  expect(await backend.read('old.md')).not.toBeNull();
+  await manager.migrateNoteNames();
+  expect(await manager.listNotes()).toHaveLength(1);
+  expect(await manager.readNote('old.md')).toBe('# 題名');
+});
+it('大文字小文字だけの変更でAPFS上の同じファイルを削除しない', async () => {
+  const { manager, backend } = await setup();
+  const path = await manager.createNote('Title');
+  await manager.saveNote(path, '# Title');
+  expect(await manager.saveNamedNote(path, '# title', '# Title')).toBe(path);
+  expect(await backend.read(path)).not.toBeNull();
+  expect(await manager.readNote(path)).toBe('# title');
+});

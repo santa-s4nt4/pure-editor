@@ -5,6 +5,7 @@ import * as fs from '@tauri-apps/plugin-fs';
 import { fetch as nativeFetch } from '@tauri-apps/plugin-http';
 import { AwsClient } from 'aws4fetch';
 import { extractTags, fromMarkdown, noteTitle, pagePath, toMarkdown } from './transformer';
+import { filenameTitle, namedNotePath, noteId, renameNoteLinks } from './note-filenames';
 import { diskImagePaths } from './image-paths';
 
 export interface Settings {
@@ -248,6 +249,13 @@ export async function relocateImages(previous: Settings, next: Settings) {
 /** ローカル書込みは直列化。ネットワークの待機中も入力・保存を止めない。 */
 export class StorageManager {
   private manifest = emptyManifest();
+  private aliases: Record<string, string> = Object.create(null);
+  resolvePath(path: string): string {
+    const seen = new Set<string>();
+    while (this.aliases[path] && !seen.has(path)) { seen.add(path); path = this.aliases[path]; }
+    return path;
+  }
+  get renamedPaths() { return { ...this.aliases }; }
   private bases: Record<string, string> = Object.create(null);
   private queue: Promise<unknown> = Promise.resolve();
   private running: Promise<void> | null = null;
@@ -275,6 +283,10 @@ export class StorageManager {
     if (state) {
       const parsed = JSON.parse(decoder.decode(state));
       for (const [path, hash] of Object.entries(parsed)) if (typeof hash === 'string' && /^(?:deleted:)?[a-f0-9]{64}$/.test(hash)) this.bases[safeRelativePath(path)] = hash;
+    }
+    const aliases = await this.backend.read('_note-renames.json');
+    if (aliases) for (const [from, to] of Object.entries(JSON.parse(decoder.decode(aliases)))) {
+      if (typeof to === 'string') this.aliases[safeRelativePath(from)] = safeRelativePath(to);
     }
     await this.refresh();
   }
@@ -304,21 +316,23 @@ export class StorageManager {
       const bytes = await this.backend.read(path);
       if (!bytes) continue;
       const text = fromMarkdown(decoder.decode(bytes));
-      const note = { path, title: noteTitle(text, path.replace(/\.md$/, '')), tags: extractTags(text), excerpt: text.replace(/^#+\s+/gm, '').replace(/\n/g, ' ').slice(0, 100), updatedAt: entry.updatedAt };
+      const note = { path, title: noteTitle(text, filenameTitle(path)), tags: extractTags(text), excerpt: text.replace(/^#+\s+/gm, '').replace(/\n/g, ' ').slice(0, 100), updatedAt: entry.updatedAt };
       this.noteCache.set(path, { hash: entry.sha256, note }); notes.push(note);
     }
     notes.sort((a, b) => b.updatedAt - a.updatedAt || a.path.localeCompare(b.path, 'ja'));
     this.titlePaths = new Map([...notes].reverse().map(note => [note.title, note.path]));
     return notes;
   }
-  private editorText(text: string) { return fromMarkdown(text, (label, path) => this.titlePaths.get(label) === path); }
+  private editorText(text: string) { return fromMarkdown(text, (label, path) => this.titlePaths.get(label) === this.resolvePath(path)); }
   async readNote(path: string) {
     await this.queue;
+    path = this.resolvePath(path);
     await this.listNotes();
     const bytes = await this.backend.read(safeRelativePath(path));
     return bytes ? this.editorText(decoder.decode(bytes)) : null;
   }
   async deleteNote(path: string): Promise<string> {
+    path = this.resolvePath(path);
     safeRelativePath(path);
     if (!path.endsWith('.md')) throw new Error('記事を選択してください。');
     const backup = `.trash/${Date.now()}-${crypto.randomUUID()}/${path}`;
@@ -339,21 +353,84 @@ export class StorageManager {
     await this.saveBytes(path, bytes);
   }
   async saveNote(path: string, text: string, expectedText?: string) {
+    path = this.resolvePath(path);
     safeRelativePath(path);
     await this.listNotes();
-    const currentTitle = noteTitle(text, path.replace(/\.md$/, ''));
+    const currentTitle = noteTitle(text, filenameTitle(path));
     await this.saveBytes(path, encoder.encode(toMarkdown(text, name => name === currentTitle ? path : this.titlePaths.get(name) ?? pagePath(name))), expectedText);
   }
   async createNote(name: string): Promise<string> {
-    const path = pagePath(name);
+    let path = namedNotePath(name, crypto.randomUUID().replace(/-/g, ''));
     await this.exclusive(async () => {
-      if (await this.backend.read(path)) return;
+      while (await this.backend.read(path)) path = namedNotePath(name, crypto.randomUUID().replace(/-/g, ''));
       await this.writeIndexed(path, encoder.encode(''));
       await this.persistIndex();
     });
     this.emit({ type: 'files' });
     void this.sync();
     return path;
+  }
+  /** Called before opening the first article, after the initial remote pull. */
+  async migrateNoteNames() {
+    const moves = new Map<string, string>();
+    await this.exclusive(async () => {
+      for (const [path, entry] of Object.entries(this.manifest.files)) {
+        if (!/\.md$/i.test(path) || entry.deleted || noteId(path)) continue;
+        const bytes = await this.backend.read(path);
+        if (!bytes) continue;
+        // Deriving legacy IDs from their old paths gives both devices the same identity.
+        const id = (await sha256(encoder.encode(`pure-note:${path}`))).slice(0, 32);
+        moves.set(path, namedNotePath(noteTitle(fromMarkdown(decoder.decode(bytes)), filenameTitle(path)), id, path));
+      }
+      await this.renameNotes(moves);
+    });
+    if (moves.size) { this.emit({ type: 'files' }); void this.sync(); }
+  }
+  async saveNamedNote(path: string, text: string, expectedText?: string): Promise<string> {
+    path = this.resolvePath(path);
+    await this.saveNote(path, text, expectedText);
+    const id = noteId(path) ?? (await sha256(encoder.encode(`pure-note:${path}`))).slice(0, 32);
+    const next = namedNotePath(noteTitle(text, filenameTitle(path)), id, path);
+    // APFS may address differently cased names as the same file: never remove its destination.
+    if (path.normalize('NFC').toLocaleLowerCase() === next.normalize('NFC').toLocaleLowerCase()) return path;
+    if (path !== next) {
+      await this.exclusive(() => this.renameNotes(new Map([[path, next]])));
+      this.emit({ type: 'files' }); void this.sync();
+    }
+    return next;
+  }
+  private async renameNotes(moves: ReadonlyMap<string, string>) {
+    if (!moves.size) return;
+    const writes: { from: string; to: string; before: Uint8Array; bytes: Uint8Array; entry: SyncEntry }[] = [];
+    for (const [from, entry] of Object.entries(this.manifest.files)) {
+      if (!/\.md$/i.test(from) || entry.deleted) continue;
+      const before = await this.backend.read(from);
+      if (!before) continue;
+      const text = decoder.decode(before);
+      const rewritten = renameNoteLinks(text, from, moves);
+      const to = moves.get(from) ?? from;
+      if (from === to && rewritten === text) continue;
+      const bytes = encoder.encode(rewritten);
+      const existing = from === to ? null : await this.backend.read(to);
+      if (existing && await sha256(existing) !== await sha256(bytes)) throw new Error(`移行先に異なる記事があります: ${to}`);
+      writes.push({ from, to, before, bytes, entry });
+    }
+    const backup = `.trash/renamed-${crypto.randomUUID()}`;
+    // Preserve originals and finish every destination before removing any source.
+    for (const item of writes) await this.backend.write(`${backup}/${item.from}`, item.before);
+    for (const item of writes) await this.backend.write(item.to, item.bytes);
+    for (const [from, to] of moves) {
+      for (const alias of Object.keys(this.aliases)) if (this.resolvePath(alias) === from) this.aliases[alias] = to;
+      this.aliases[from] = to; delete this.aliases[to];
+    }
+    await this.backend.write('_note-renames.json', encoder.encode(JSON.stringify(this.aliases)));
+    for (const item of writes) {
+      this.manifest.files[item.to] = { ...item.entry, sha256: await sha256(item.bytes) };
+      if (item.from !== item.to) this.manifest.files[item.from] = { ...item.entry, updatedAt: Date.now(), deleted: true };
+    }
+    await this.persistIndex();
+    for (const item of writes) if (item.from !== item.to) await this.backend.remove(item.from);
+    this.noteCache.clear();
   }
   private async writeIndexed(path: string, bytes: Uint8Array, entry?: SyncEntry) {
     await this.backend.write(path, bytes);

@@ -7,6 +7,7 @@ import { isExternalUrl, noteTitle, pagePath, type Reference } from './lib/transf
 import { StorageManager, R2Backend, chooseFolder, createBackend, loadSettings, persistSettings, relocateImages, validateR2, mobile, native, type Note, type Settings } from './lib/storage';
 import { scrollIndicator } from './lib/scrollbar';
 import { NavigationHistory, type Visit } from './lib/navigation';
+import { filenameTitle } from './lib/note-filenames';
 import { articleOutline, type OutlineHeading } from './lib/outline';
 import { HistorySwipe, outlineScrollsArticle, wheelDistance } from './lib/gestures';
 import AnimatedWordmark from './components/AnimatedWordmark';
@@ -133,9 +134,15 @@ export default function App() {
     const key = journalKey(path);
     // 前の保存の失敗で、以後の保存を止めない。
     saveTask = saveTask.catch(() => undefined).then(async () => {
-      await currentStorage.saveNote(path, text, version.text);
+      const renamed = await currentStorage.saveNamedNote(path, text, version.text);
+      if (activePath() === path && renamed !== path) {
+        setActivePath(renamed); history.renamePaths(value => currentStorage.resolvePath(value));
+        if (settings()) { const next = { ...settings()!, lastFile: renamed }; setSettings(next); await persistSettings(next); }
+        if (localStorage.getItem(key) === text) localStorage.removeItem(key);
+        if (editor?.view.state.doc.toString() !== text) remember(editor!.view.state.doc.toString());
+      }
       version.text = text;
-      if (editor?.view.state.doc.toString() === text && activePath() === path) dirty = false;
+      if (editor?.view.state.doc.toString() === text && activePath() === renamed) dirty = false;
       if (localStorage.getItem(key) === text) localStorage.removeItem(key);
     });
     await saveTask;
@@ -149,7 +156,7 @@ export default function App() {
     timer = setTimeout(() => void flush().catch(error => report(`保存できませんでした。${String(error)}`)), 2000);
   }
   function updateTitle(text: string) {
-    const title = noteTitle(text, activePath().replace(/\.md$/, '') || '無題');
+    const title = noteTitle(text, filenameTitle(activePath()) || '無題');
     setActiveTitle(title); document.title = `${title} — pure`;
     if (!mobile) { setOutline(articleOutline(text)); measureOutline(); }
   }
@@ -232,10 +239,7 @@ export default function App() {
     creating = true;
     try {
       await flush();
-      const existing = await storage.listNotes();
-      let name = '無題'; let index = 1;
-      while (existing.some(note => note.path === `${name}.md`)) name = `無題 ${++index}`;
-      const path = await storage.createNote(name);
+      const path = await storage.createNote('無題');
       await storage.saveNote(path, '# \n\n'); await openNote(path);
       editor?.view.dispatch({ selection: { anchor: 2 } }); editor?.view.focus();
     } finally { creating = false; }
@@ -380,10 +384,17 @@ export default function App() {
         bindStorage(manager);
         await manager.initialize();
         if (native && currentSettings.syncEnabled) { manager.setRemote(new R2Backend(currentSettings)); await manager.sync(); }
+        await manager.migrateNoteNames();
+        for (const [from, to] of Object.entries(manager.renamedPaths)) {
+          const oldKey = journalKey(from); const newKey = journalKey(to);
+          const recovered = localStorage.getItem(oldKey);
+          if (recovered !== null && localStorage.getItem(newKey) === null) { localStorage.setItem(newKey, recovered); localStorage.removeItem(oldKey); }
+        }
+        if (currentSettings.lastFile) { currentSettings.lastFile = manager.resolvePath(currentSettings.lastFile); await persistSettings(currentSettings); }
         await reloadNotes();
         if (!notes().length && !manager.hasHistory) {
           const path = await manager.createNote('はじめに');
-          await manager.saveNote(path, introduction);
+          await manager.saveNamedNote(path, introduction);
           await reloadNotes();
         }
         setReady(true);
@@ -478,7 +489,7 @@ export default function App() {
       <div class="home-scroll" ref={homeScroller}>
         <header class="home-heading"><h1><Show when={!homeTag()} fallback={homeTag()}><AnimatedWordmark active={home() && !palette()} /></Show></h1></header>
         <div class="home-search"><input type="search" aria-label="記事を探す" placeholder="タイトル、タグで探す" value={homeQuery()} onInput={event => setHomeQuery(event.currentTarget.value)} /><Show when={homeQuery()}><button type="button" onClick={() => setHomeQuery('')}>すべて</button></Show></div>
-        <div class="note-grid"><For each={homeNotes()}>{note => <article class="note-card"><button class="note-title" type="button" onClick={() => void openNote(note.path).catch(error => report(String(error)))}>{note.title}</button><div class="note-tags"><For each={note.tags.slice(0, 3)}>{tag => <button type="button" onClick={() => void followReference({ kind: 'tag', value: tag, from: 0, to: 0 })}>{tag}</button>}</For><Show when={note.tags.length > 3}><span class="tags-more" title={note.tags.slice(3).join('、')}>…</span></Show></div></article>}</For></div>
+        <div class="note-grid"><For each={homeNotes()}>{note => <article class="note-card"><button class="note-title" type="button" disabled={!ready()} onClick={() => void openNote(note.path).catch(error => report(String(error)))}>{note.title}</button><div class="note-tags"><For each={note.tags.slice(0, 3)}>{tag => <button type="button" onClick={() => void followReference({ kind: 'tag', value: tag, from: 0, to: 0 })}>{tag}</button>}</For><Show when={note.tags.length > 3}><span class="tags-more" title={note.tags.slice(3).join('、')}>…</span></Show></div></article>}</For></div>
         <Show when={ready() && homeNotes().length === 0}><p class="home-empty">{homeQuery() ? '見つかりませんでした。' : 'まだ、何も書かれていません。'}</p></Show>
       </div>
     </section>

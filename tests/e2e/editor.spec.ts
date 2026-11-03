@@ -15,6 +15,7 @@ async function newNote(page: Page, isMobile: boolean, name: string) {
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('.note-title').first()).toBeVisible();
+  await expect(page.locator('.writing-surface')).toHaveAttribute('aria-busy', 'false');
 });
 
 test('検索、新規作成、2秒保存、再読み込み、タグ絞り込み', async ({ page, isMobile }) => {

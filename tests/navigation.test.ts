@@ -17,3 +17,13 @@ it('戻った先で別の記事へ移動すると、古い進む履歴を破棄�
   history.push({ kind: 'note', path: 'b.md' }, { kind: 'home' });
   expect(history.move(1, { kind: 'note', path: 'b.md' })).toBeNull();
 });
+it('改名後も履歴と選択位置を保持し、移動可能な向きを調べる', () => {
+  const history = new NavigationHistory();
+  history.push({ kind: 'note', path: 'old.md', anchor: 12 }, { kind: 'home' });
+  history.renamePaths(path => path === 'old.md' ? 'new.md' : path);
+  expect(history.canMove(-1)).toBe(true);
+  expect(history.canMove(1)).toBe(false);
+  history.move(-1, { kind: 'note', path: 'new.md', anchor: 12 });
+  expect(history.canMove(1, visit => visit.path !== 'new.md')).toBe(false);
+  expect(history.move(1, { kind: 'home' })).toMatchObject({ path: 'new.md', anchor: 12 });
+});

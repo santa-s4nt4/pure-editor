@@ -17,5 +17,12 @@ export class NavigationHistory {
     }
     return null;
   }
+  canMove(direction: number, available: (visit: Visit) => boolean = () => true) {
+    for (let index = this.index + direction; index >= 0 && index < this.entries.length; index += direction) if (available(this.entries[index])) return true;
+    return false;
+  }
+  renamePaths(resolve: (path: string) => string) {
+    this.entries = this.entries.map(visit => visit.path ? { ...visit, path: resolve(visit.path) } : visit);
+  }
   reset() { this.entries = [{ kind: 'home' }]; this.index = 0; }
 }

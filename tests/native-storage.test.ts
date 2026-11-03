@@ -44,4 +44,25 @@ describe('ネイティブ FS アダプターの保存先', () => {
     expect(nextIndex.files['note.md']).toEqual(oldIndex.files['note.md']);
     expect(await restarted.readNote('note.md')).toBe(`# 題名\n![](${image})`);
   });
+  it('実ファイルの改名でも別フォルダ画像の参照を維持し、原本を退避する', async () => {
+    const settings = config('My Pictures');
+    const backend = await createBackend(settings);
+    const manager = new StorageManager(backend); await manager.initialize();
+    const image = await manager.saveImage(new Uint8Array([1, 2, 3]));
+    const text = `# 新しい題名\n![](${image})`;
+    await manager.saveNote('folder/old.md', text);
+    await manager.migrateNoteNames();
+    const [note] = await manager.listNotes();
+    expect(note.path).toMatch(/^folder\/新しい題名--[a-f0-9]{32}\.md$/);
+    expect(await actual.readFile(join(settings.folder, note.path), 'utf8')).toContain(`../../My%20Pictures/${image.slice(7)}`);
+    expect(await manager.readNote('folder/old.md')).toBe(text);
+    await expect(actual.stat(join(settings.folder, 'folder/old.md'))).rejects.toThrow();
+    const backups = await actual.readdir(join(settings.folder, '.trash'));
+    expect(backups[0]).toMatch(/^renamed-/);
+    const renamed = await manager.saveNamedNote(note.path, text.replace('新しい題名', '次の題名'), text);
+    const restarted = new StorageManager(backend); await restarted.initialize();
+    expect(await restarted.readNote('folder/old.md')).toContain('# 次の題名');
+    expect((await restarted.listNotes())[0].path).toBe(renamed);
+  });
+
 });
