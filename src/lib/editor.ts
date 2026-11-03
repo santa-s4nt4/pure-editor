@@ -16,6 +16,7 @@ import { dataImageBlob } from './image-data';
 export interface EditorOptions {
   parent: HTMLElement;
   text: string;
+  readOnly?: boolean;
   storage: StorageManager;
   tags(): readonly string[];
   onChange(text: string): void;
@@ -159,7 +160,7 @@ class CheckboxWidget extends WidgetType {
   eq(other: CheckboxWidget) { return this.checked === other.checked && this.position === other.position; }
   toDOM(view: EditorView) {
     const prefix = document.createElement('span'); prefix.className = 'cm-task-prefix'; prefix.contentEditable = 'false';
-    const input = document.createElement('input'); input.type = 'checkbox'; input.checked = this.checked; input.className = 'cm-task-checkbox'; input.setAttribute('aria-label', this.checked ? '完了を取り消す' : '完了にする');
+    const input = document.createElement('input'); input.type = 'checkbox'; input.checked = this.checked; input.className = 'cm-task-checkbox'; input.disabled = view.state.readOnly; input.setAttribute('aria-label', this.checked ? '完了を取り消す' : '完了にする');
     input.addEventListener('change', () => {
       view.dispatch({ changes: { from: this.position, to: this.position + 1, insert: input.checked ? 'x' : ' ' }, userEvent: 'input.task' });
     });
@@ -373,6 +374,7 @@ export function createEditor(options: EditorOptions): { view: EditorView; destro
     state: EditorState.create({
       doc: options.text,
       extensions: [
+        ...(options.readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false), EditorState.transactionFilter.of(transaction => transaction.docChanged ? [] : transaction)] : []),
         autocompletion({ override: [tagCompletion(options.tags)], activateOnTypingDelay: 75, defaultKeymap: false, icons: false }),
         Prec.highest(keymap.of(completionKeymap)),
         EditorState.phrases.of({ Completions: 'タグの候補' }),
@@ -441,6 +443,7 @@ export function createEditor(options: EditorOptions): { view: EditorView; destro
             event.preventDefault(); return true;
           },
           paste(event, editor) {
+            if (options.readOnly) { event.preventDefault(); return true; }
             const data = event.clipboardData;
             if (!data) return false;
             const images = clipboardImageFiles(data);
@@ -469,6 +472,7 @@ export function createEditor(options: EditorOptions): { view: EditorView; destro
           },
           dragover(event) { if ([...(event.dataTransfer?.items ?? [])].some(item => item.type.startsWith('image/'))) { event.preventDefault(); return true; } return false; },
           drop(event, editor) {
+            if (options.readOnly) { event.preventDefault(); return true; }
             const images = [...(event.dataTransfer?.files ?? [])].filter(file => file.type.startsWith('image/'));
             if (!images.length) return false;
             event.preventDefault();

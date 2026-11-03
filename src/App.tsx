@@ -62,6 +62,8 @@ export default function App() {
   let measureOutline = () => {};
   const history = new NavigationHistory();
   let navigatingHistory = false;
+  let clickTimer: ReturnType<typeof setTimeout> | undefined;
+  let doubleClickDelay = 500;
   createEffect(() => {
     const theme = (palette() && screen() === 'settings' ? draft()?.theme : settings()?.theme) ?? 'auto';
     document.documentElement.dataset.theme = theme;
@@ -275,6 +277,22 @@ export default function App() {
       }
     } catch (error) { report(String(error)); }
   }
+  async function openArticleWindow(path: string) {
+    try {
+      await flush(); path = storage.resolvePath(path);
+      const url = `/?article=${encodeURIComponent(path)}`;
+      if (!native) { window.open(url, '_blank', 'noopener,noreferrer'); return; }
+      const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+      const child = new WebviewWindow(`article-${crypto.randomUUID()}`, { url, title: notes().find(note => note.path === path)?.title ?? 'pure', width: 900, height: 800, minWidth: 340, minHeight: 440, titleBarStyle: 'overlay', hiddenTitle: true, dragDropEnabled: false });
+      void child.once('tauri://error', event => report(`別ウィンドウを開けませんでした。${String(event.payload)}`));
+    } catch (error) { report(String(error)); }
+  }
+  function activateNote(event: MouseEvent, path: string) {
+    clearTimeout(clickTimer);
+    if (mobile || event.detail === 0) { void openNote(path).catch(error => report(String(error))); return; }
+    if (event.detail > 1) return;
+    clickTimer = setTimeout(() => { if (home() && !palette()) void openNote(path).catch(error => report(String(error))); }, doubleClickDelay + 30);
+  }
   function openPalette(value = '') {
     setScreen('notes'); setQuery(value); setSelected(0); setPalette(true);
     void reloadNotes().catch(error => report(String(error)));
@@ -402,6 +420,7 @@ export default function App() {
         if (native && !mobile) {
           const { getCurrentWindow } = await import('@tauri-apps/api/window');
           const win = getCurrentWindow();
+          doubleClickDelay = await invoke<number>('double_click_interval');
           unlistenScale = await win.onScaleChanged(() => {
             void invoke('refresh_display').then(() => { editor?.view.requestMeasure(); window.dispatchEvent(new Event('resize')); }).catch(error => report(String(error)));
           });
@@ -468,7 +487,7 @@ export default function App() {
     window.addEventListener('focus', online);
     const retry = setInterval(() => { if (ready() && document.visibilityState === 'visible' && navigator.onLine) void storage.sync(); }, 60_000);
     onCleanup(() => {
-      disposed = true; clearTimeout(timer); clearTimeout(toastTimer); clearInterval(retry);
+      disposed = true; clearTimeout(clickTimer); clearTimeout(timer); clearTimeout(toastTimer); clearInterval(retry);
       paper.removeEventListener('wheel', wheel, true);
       window.removeEventListener('keydown', keydown, true); document.removeEventListener('visibilitychange', visibility);
       window.removeEventListener('pagehide', pagehide); window.removeEventListener('online', online); window.removeEventListener('focus', online);
@@ -489,7 +508,7 @@ export default function App() {
       <div class="home-scroll" ref={homeScroller}>
         <header class="home-heading"><h1><Show when={!homeTag()} fallback={homeTag()}><AnimatedWordmark active={home() && !palette()} /></Show></h1></header>
         <div class="home-search"><input type="search" aria-label="記事を探す" placeholder="タイトル、タグで探す" value={homeQuery()} onInput={event => setHomeQuery(event.currentTarget.value)} /><Show when={homeQuery()}><button type="button" onClick={() => setHomeQuery('')}>すべて</button></Show></div>
-        <div class="note-grid"><For each={homeNotes()}>{note => <article class="note-card"><button class="note-title" type="button" disabled={!ready()} onClick={() => void openNote(note.path).catch(error => report(String(error)))}>{note.title}</button><div class="note-tags"><For each={note.tags.slice(0, 3)}>{tag => <button type="button" onClick={() => void followReference({ kind: 'tag', value: tag, from: 0, to: 0 })}>{tag}</button>}</For><Show when={note.tags.length > 3}><span class="tags-more" title={note.tags.slice(3).join('、')}>…</span></Show></div></article>}</For></div>
+        <div class="note-grid"><For each={homeNotes()}>{note => <article class="note-card"><button class="note-title" type="button" disabled={!ready()} onClick={event => activateNote(event, note.path)} onDblClick={() => { if (!mobile) { clearTimeout(clickTimer); void openArticleWindow(note.path); } }}>{note.title}</button><div class="note-tags"><For each={note.tags.slice(0, 3)}>{tag => <button type="button" onClick={() => void followReference({ kind: 'tag', value: tag, from: 0, to: 0 })}>{tag}</button>}</For><Show when={note.tags.length > 3}><span class="tags-more" title={note.tags.slice(3).join('、')}>…</span></Show></div></article>}</For></div>
         <Show when={ready() && homeNotes().length === 0}><p class="home-empty">{homeQuery() ? '見つかりませんでした。' : 'まだ、何も書かれていません。'}</p></Show>
       </div>
     </section>

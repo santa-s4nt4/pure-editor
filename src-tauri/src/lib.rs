@@ -1,3 +1,4 @@
+mod trackpad;
 const KEYCHAIN_SERVICE: &str = "jp.pure.editor.r2";
 const KEYCHAIN_ACCOUNT: &str = "secret-access-key";
 mod video;
@@ -59,7 +60,7 @@ pub fn run() {
                 presentation::scale_changed(window, *scale_factor);
             }
         })
-        .invoke_handler(tauri::generate_handler![read_secret, write_secret, video::video_url, images::encode_webp, presentation::refresh_display])
+        .invoke_handler(tauri::generate_handler![read_secret, write_secret, video::video_url, images::encode_webp, presentation::refresh_display, trackpad::double_click_interval])
         .run(tauri::generate_context!())
         .expect("pure を起動できませんでした");
 }

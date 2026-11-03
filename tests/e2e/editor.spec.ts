@@ -390,3 +390,20 @@ test('箇条書きの先頭に画像をドロップし、順序とリストを�
   await expect(page.locator('.cm-embed-image.is-list img')).toHaveCount(2);
   await expect.poll(() => page.locator('.cm-embed-image img').evaluateAll(elements => elements.map(element => (element as HTMLImageElement).naturalWidth))).toEqual([24, 48]);
 });
+
+test('ダブルクリックでトップを残したまま閲覧ウィンドウを開く', async ({ page, context, isMobile }) => {
+  test.skip(isMobile, 'Mac の複数ウィンドウ操作');
+  await newNote(page, isMobile, '別窓テスト');
+  const editor = page.getByRole('textbox', { name: 'ノート本文' });
+  await editor.fill('# 改名した記事\n\n別ウィンドウの本文です。');
+  await page.waitForTimeout(2300);
+  await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
+  const childPromise = context.waitForEvent('page');
+  await page.getByRole('button', { name: '改名した記事', exact: true }).dblclick();
+  const child = await childPromise;
+  await expect(child.getByRole('main', { name: '記事の閲覧' })).toBeVisible();
+  await expect(child.locator('.cm-content')).toContainText('別ウィンドウの本文です。');
+  await expect(child.locator('.cm-content')).toHaveAttribute('contenteditable', 'false');
+  await expect(page.getByRole('region', { name: '記事一覧' })).toBeVisible();
+  await child.close();
+});
