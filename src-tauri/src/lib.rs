@@ -54,7 +54,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_persisted_scope::init())
         .plugin(tauri_plugin_clipboard_manager::init())
-        .setup(|app| { presentation::initialize(app); Ok(()) })
+        .setup(|app| { presentation::initialize(app); trackpad::initialize(app); Ok(()) })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::ScaleFactorChanged { scale_factor, .. } = event {
                 presentation::scale_changed(window, *scale_factor);

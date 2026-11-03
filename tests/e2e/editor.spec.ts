@@ -407,3 +407,14 @@ test('ダブルクリックでトップを残したまま閲覧ウィンドウ�
   await expect(page.getByRole('region', { name: '記事一覧' })).toBeVisible();
   await child.close();
 });
+
+test('同じ位置からの往復スワイプと小さな矢印表示', async ({ page, isMobile }) => {
+  test.skip(isMobile, 'トラックパッド操作');
+  await newNote(page, isMobile, 'スワイプテスト');
+  await page.locator('main.paper').dispatchEvent('wheel', { deltaX: -120, deltaY: 0, deltaMode: 0 });
+  await expect(page.getByRole('region', { name: '記事一覧' })).toBeVisible();
+  await expect(page.locator('.history-swipe')).toHaveClass(/is-visible/);
+  await page.locator('main.paper').dispatchEvent('wheel', { deltaX: 120, deltaY: 0, deltaMode: 0 });
+  await expect(page).toHaveTitle('スワイプテスト — pure');
+  await expect(page.locator('.history-swipe')).toHaveClass(/is-forward/);
+});

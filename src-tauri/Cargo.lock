@@ -3047,6 +3047,7 @@ dependencies = [
 name = "pure-editor"
 version = "0.1.0"
 dependencies = [
+ "block2",
  "getrandom 0.3.4",
  "objc2",
  "objc2-app-kit",

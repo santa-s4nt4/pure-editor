@@ -35,6 +35,7 @@ export default function App() {
   const [syncStatus, setSyncStatus] = createSignal('同期はオフです');
   const [settingsError, setSettingsError] = createSignal('');
   const [startupError, setStartupError] = createSignal('');
+  const [swipeHint, setSwipeHint] = createSignal<{ side: -1 | 1; progress: number; available: boolean; committed: boolean } | null>(null);
   const [outline, setOutline] = createSignal<OutlineHeading[]>([]);
   const [outlineCurrent, setOutlineCurrent] = createSignal<number | null>(null);
   const [outlineGutter, setOutlineGutter] = createSignal(0);
@@ -62,6 +63,7 @@ export default function App() {
   let measureOutline = () => {};
   const history = new NavigationHistory();
   let navigatingHistory = false;
+  let pendingTravel: number | null = null;
   let clickTimer: ReturnType<typeof setTimeout> | undefined;
   let doubleClickDelay = 500;
   createEffect(() => {
@@ -75,7 +77,7 @@ export default function App() {
     return home() ? { kind: 'home', tag: homeTag(), query: homeQuery(), scroll: homeScroller.scrollTop } : { kind: 'note', path: activePath(), anchor: selection?.anchor, head: selection?.head, scroll: editor?.view.scrollDOM.scrollTop };
   }
   async function travel(direction: number) {
-    if (navigatingHistory) return;
+    if (navigatingHistory) { pendingTravel = direction; return; }
     navigatingHistory = true;
     try {
       await navigationTask; await flush();
@@ -84,7 +86,10 @@ export default function App() {
       if (visit.kind === 'home') await goHome(visit.tag ?? '', visit);
       else await openNote(visit.path!, visit);
     } catch (error) { report(String(error)); }
-    finally { navigatingHistory = false; }
+    finally {
+      navigatingHistory = false;
+      if (pendingTravel !== null) { const next = pendingTravel; pendingTravel = null; void travel(next); }
+    }
   }
 
   const report = (text: string) => {
@@ -394,6 +399,8 @@ export default function App() {
   onMount(() => {
     let unlistenClose: (() => void) | undefined;
     let unlistenScale: (() => void) | undefined;
+    let unlistenTrackpad: (() => void) | undefined;
+    let nativeTrackpadReady = false;
     const boot = async () => {
       try {
         const currentSettings = await loadSettings();
@@ -421,6 +428,10 @@ export default function App() {
           const { getCurrentWindow } = await import('@tauri-apps/api/window');
           const win = getCurrentWindow();
           doubleClickDelay = await invoke<number>('double_click_interval');
+          unlistenTrackpad = await win.listen<Parameters<typeof swipe.feed>[0] & { x: number; yFromBottom: number }>('pure://trackpad-scroll', event => {
+            handleSwipe(event.payload, document.elementFromPoint(event.payload.x, window.innerHeight - event.payload.yFromBottom));
+          });
+          nativeTrackpadReady = true;
           unlistenScale = await win.onScaleChanged(() => {
             void invoke('refresh_display').then(() => { editor?.view.requestMeasure(); window.dispatchEvent(new Event('resize')); }).catch(error => report(String(error)));
           });
@@ -466,17 +477,25 @@ export default function App() {
     const pagehide = () => { void flush().catch(() => undefined); };
     const online = () => { void refreshFromDisk(); };
     const swipe = new HistorySwipe();
-    const wheel = (event: WheelEvent) => {
-      if (mobile || !ready() || busy() || palette()) { swipe.reset(); return; }
-      const target = event.target instanceof Element ? event.target : null;
-      if (target?.closest('input, textarea, select, .cm-tooltip')) { swipe.reset(); return; }
-      // Preserve horizontal scrolling inside code blocks and other scrollable regions.
+    let hintTimer: ReturnType<typeof setTimeout> | undefined;
+    const handleSwipe = (event: Parameters<typeof swipe.feed>[0], target: Element | null) => {
+      if (mobile || !ready() || busy() || palette()) { swipe.reset(); setSwipeHint(null); return false; }
+      if (target?.closest('select, .cm-tooltip, iframe')) { swipe.reset(); return false; }
       for (let node = target; node && node !== paper; node = node.parentElement) {
-        if (node.scrollWidth > node.clientWidth + 1 && /auto|scroll/.test(getComputedStyle(node).overflowX)) { swipe.reset(); return; }
+        if (node.scrollWidth > node.clientWidth + 1 && /auto|scroll/.test(getComputedStyle(node).overflowX)) { swipe.reset(); return false; }
       }
       const result = swipe.feed(event, performance.now());
-      if (result.claim && event.cancelable) event.preventDefault();
+      if (result.side) {
+        const available = history.canMove(result.side, visit => visit.kind === 'home' || notes().some(note => note.path === visit.path));
+        setSwipeHint({ side: result.side, progress: result.progress, available, committed: !!result.direction });
+        clearTimeout(hintTimer); hintTimer = setTimeout(() => setSwipeHint(null), 220);
+      }
       if (result.direction) void travel(result.direction);
+      return result.claim;
+    };
+    const wheel = (event: WheelEvent) => {
+      if (nativeTrackpadReady) return;
+      if (handleSwipe(event, event.target instanceof Element ? event.target : null) && event.cancelable) event.preventDefault();
     };
     paper.addEventListener('wheel', wheel, { capture: true, passive: false });
     window.addEventListener('keydown', keydown, true);
@@ -487,11 +506,11 @@ export default function App() {
     window.addEventListener('focus', online);
     const retry = setInterval(() => { if (ready() && document.visibilityState === 'visible' && navigator.onLine) void storage.sync(); }, 60_000);
     onCleanup(() => {
-      disposed = true; clearTimeout(clickTimer); clearTimeout(timer); clearTimeout(toastTimer); clearInterval(retry);
+      disposed = true; clearTimeout(hintTimer); clearTimeout(clickTimer); clearTimeout(timer); clearTimeout(toastTimer); clearInterval(retry);
       paper.removeEventListener('wheel', wheel, true);
       window.removeEventListener('keydown', keydown, true); document.removeEventListener('visibilitychange', visibility);
       window.removeEventListener('pagehide', pagehide); window.removeEventListener('online', online); window.removeEventListener('focus', online);
-      removeHomeScrollbar(); unlistenStorage?.(); unlistenClose?.(); unlistenScale?.(); clearOutline?.(); editor?.destroy();
+      removeHomeScrollbar(); unlistenStorage?.(); unlistenClose?.(); unlistenScale?.(); unlistenTrackpad?.(); clearOutline?.(); editor?.destroy();
     });
   });
 
@@ -519,6 +538,7 @@ export default function App() {
         <nav class="outline-panel" aria-label="記事の目次"><For each={outline()}>{heading => <button type="button" class="outline-heading" classList={{ 'is-current': heading.from === outlineCurrent() }} aria-current={heading.from === outlineCurrent() ? 'location' : undefined} style={{ '--toc-depth': String(heading.level - outlineLevel()) }} onClick={() => jumpToHeading(heading)}>{heading.title}</button>}</For></nav>
       </aside>
     </Show>
+    <div class="history-swipe" classList={{ 'is-visible': !!swipeHint(), 'is-forward': swipeHint()?.side === 1, 'is-unavailable': !swipeHint()?.available }} style={{ '--swipe-progress': String(swipeHint()?.progress ?? 0) }} aria-hidden="true"><span>{swipeHint()?.side === 1 ? '›' : '‹'}</span></div>
     <Show when={startupError()}><div class="startup-message" role="alert"><p>ノートを開けませんでした。</p><p>{startupError()}</p><button type="button" onClick={() => location.reload()}>もう一度開く</button></div></Show>
     <Show when={ready()}><button class="palette-trigger" type="button" aria-label="ノートを開く" title="ノートを開く（⌘ L）" onClick={() => openPalette()}><span aria-hidden="true">···</span></button></Show>
     <dialog class="palette" ref={dialog} aria-label={screen() === 'notes' ? 'ノートとコマンド' : '設定'} onCancel={event => { event.preventDefault(); if (!busy()) closePalette(); }} onClick={event => { if (event.target === dialog && !busy()) closePalette(); }}>
