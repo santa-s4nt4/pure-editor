@@ -21,6 +21,7 @@ button:disabled { cursor: wait; opacity: 0.5; }
 .home-search { display: flex; align-items: baseline; gap: 1rem; margin-block: 2.5rem 3.5rem; font-size: 0.9em; }
 .home-search input { inline-size: min(22rem, 100%); color: var(--text-ink); padding: 0; outline: none; }
 .home-search input::placeholder { color: var(--text-faint); }
+@media (pointer: coarse) { .home-search input { font-size: 1rem; } }
 .home-search button { color: var(--text-muted); padding: 0; }
 .note-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--home-column)), 1fr)); gap: var(--home-row-gap) var(--home-column-gap); align-items: start; }
 .note-card { min-inline-size: 0; }
@@ -113,6 +114,7 @@ button:disabled { cursor: wait; opacity: 0.5; }
   &.is-current .option-name::after { content: ' ·'; color: var(--text-faint); }
 }
 .palette-footer { display: flex; justify-content: space-between; gap: 1rem; padding: 1em var(--palette-padding); }
+.palette-home { padding: 0; color: var(--text-muted); }
 .footer-space { margin-inline-start: 1em; }
 .empty-result { margin: 0; padding: 0.6em var(--palette-padding) 1.1em; color: var(--text-faint); font-size: var(--font-size-small); }
 .settings {

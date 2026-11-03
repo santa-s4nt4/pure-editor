@@ -58,3 +58,7 @@
 }
 :root[data-theme='light'] { color-scheme: light; }
 :root[data-theme='dark'] { color-scheme: dark; }
+/* iPhone のフォーカス時の自動ズームを避けるため、編集する文字は16px相当以上に。 */
+@media (pointer: coarse) {
+  :root { --font-size-body: 1rem; }
+}

@@ -451,7 +451,7 @@ export default function App() {
               <span class="option-name">{action.label}</span><span class="option-detail">{action.detail}</span><span class="option-enter" aria-hidden="true">↵</span>
             </button>}</For>
           </div>
-          <div class="palette-footer"><span>pure</span><span>↑ ↓ 選ぶ <span class="footer-space">↵ 開く</span></span></div>
+          <div class="palette-footer"><Show when={mobile && (!home() || homeTag())} fallback={<span>pure</span>}><button class="palette-home" type="button" disabled={busy()} onClick={() => void goHome().catch(error => report(String(error)))}>トップページに戻る</button></Show><span>↑ ↓ 選ぶ <span class="footer-space">↵ 開く</span></span></div>
         </Show>
       </div>
     </dialog>
