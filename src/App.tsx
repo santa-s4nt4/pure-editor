@@ -37,6 +37,7 @@ export default function App() {
   const [outlineCurrent, setOutlineCurrent] = createSignal<number | null>(null);
   const [outlineGutter, setOutlineGutter] = createSignal(0);
   const outlineLevel = createMemo(() => Math.min(6, ...outline().map(heading => heading.level)));
+  const existingTags = createMemo(() => notes().flatMap(note => note.tags));
   let host!: HTMLDivElement;
   let homeScroller!: HTMLDivElement;
   let dialog!: HTMLDialogElement;
@@ -199,7 +200,7 @@ export default function App() {
       loadedVersion = { text };
       const recovered = localStorage.getItem(journalKey(path));
       updateTitle(recovered ?? text);
-      editor = createEditor({ parent: host, text: recovered ?? text, storage, onChange: autosave, onReference: followReference, onError: report, onSave: () => void flush().then(() => report('保存しました。')).catch(error => report(String(error))) });
+      editor = createEditor({ parent: host, text: recovered ?? text, storage, tags: existingTags, onChange: autosave, onReference: followReference, onError: report, onSave: () => void flush().then(() => report('保存しました。')).catch(error => report(String(error))) });
       bindOutline(editor.view);
       dirty = recovered !== null && recovered !== text;
       if (dirty) timer = setTimeout(() => void flush().catch(error => report(String(error))), 2000);

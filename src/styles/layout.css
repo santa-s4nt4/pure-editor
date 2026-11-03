@@ -167,3 +167,9 @@ button:disabled { cursor: wait; opacity: 0.5; }
 .startup-message button { color: var(--text-accent); padding: 0; }
 @keyframes appear { from { opacity: 0; transform: translateY(0.4rem); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+
+/* Existing tags share the quiet palette used by inline references. */
+.cm-tooltip.cm-tooltip-autocomplete { background: var(--paper); color: var(--text-ink); border: 1px solid var(--text-faint); border-radius: 4px; box-shadow: 0 3px 14px #00000012; font: inherit; }
+.cm-tooltip.cm-tooltip-autocomplete > ul { font-family: inherit; max-height: 14em; }
+.cm-tooltip.cm-tooltip-autocomplete > ul > li { padding: .25em .7em; }
+.cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected] { background: var(--selection); color: var(--text-ink); }

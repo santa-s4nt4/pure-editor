@@ -1,4 +1,6 @@
-import { EditorState, EditorSelection, StateEffect, StateField, type Extension } from '@codemirror/state';
+import { autocompletion, completionKeymap } from '@codemirror/autocomplete';
+import { tagCompletion } from './tag-completion';
+import { EditorState, EditorSelection, Prec, StateEffect, StateField, type Extension } from '@codemirror/state';
 import { Decoration, EditorView, WidgetType, drawSelection, dropCursor, keymap, placeholder, type DecorationSet } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { HighlightStyle, indentUnit, syntaxHighlighting } from '@codemirror/language';
@@ -15,6 +17,7 @@ export interface EditorOptions {
   parent: HTMLElement;
   text: string;
   storage: StorageManager;
+  tags(): readonly string[];
   onChange(text: string): void;
   onReference(reference: Reference): void;
   onError(message: string): void;
@@ -39,7 +42,7 @@ function styleMediaList(container: HTMLElement, prefix: string, sourceVisible: b
   if (!prefix) return;
   container.classList.add('is-list');
   container.classList.toggle('has-source', sourceVisible);
-  const indent = /^\s*/.exec(prefix)![0].replace(/\t/g, '  ').length;
+  const indent = /^\s*/.exec(prefix)![0].replace(/\t/g, '   ').length;
   container.style.setProperty('--list-indent', `calc(1.5em + ${indent}ch)`);
 }
 
@@ -370,9 +373,12 @@ export function createEditor(options: EditorOptions): { view: EditorView; destro
     state: EditorState.create({
       doc: options.text,
       extensions: [
+        autocompletion({ override: [tagCompletion(options.tags)], activateOnTypingDelay: 75, defaultKeymap: false, icons: false }),
+        Prec.highest(keymap.of(completionKeymap)),
+        EditorState.phrases.of({ Completions: 'タグの候補' }),
         history(), markdown(), syntaxHighlighting(highlighting), EditorView.lineWrapping, drawSelection(), dropCursor(),
         EditorView.scrollMargins.of(() => ({ top: 56, bottom: 24 })),
-        placeholder('ただ、書く。'), mediaExtension(options.storage), insertions, indentUnit.of('  '),
+        placeholder('ただ、書く。'), mediaExtension(options.storage), insertions, indentUnit.of('   '),
         EditorView.contentAttributes.of({ 'aria-label': 'ノート本文', 'aria-multiline': 'true', spellcheck: 'false', autocapitalize: 'off', autocorrect: 'off' }),
         keymap.of([
           { key: 'ArrowUp', run: editor => enterMedia(editor, -1), shift: editor => enterMedia(editor, -1, true) },

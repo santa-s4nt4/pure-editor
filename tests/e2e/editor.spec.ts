@@ -200,7 +200,7 @@ test('Tab のインデント、横線、チェックボックスと完了表示'
   await newNote(page, isMobile, '書式');
   const editor = page.getByRole('textbox', { name: 'ノート本文' });
   await editor.fill('- 箇条書き');
-  await editor.press('Tab'); await expect(editor).toHaveText('  箇条書き');
+  await editor.press('Tab'); await expect(editor).toHaveText('   箇条書き');
   await editor.press('Shift+Tab'); await expect(editor).toHaveText('箇条書き');
   await editor.fill('');
   await editor.pressSequentially('--- ');
