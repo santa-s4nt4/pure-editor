@@ -14,7 +14,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-    
+
     <script>
         tailwind.config = {
             darkMode: 'class',
@@ -127,7 +127,7 @@
 
     <!-- Main 1024x1024 Viewport Area -->
     <main class="flex-1 h-full w-full relative overflow-hidden flex items-center justify-center bg-[radial-gradient(#27272a_1px,transparent_1px)] [background-size:20px_20px]">
-        
+
         <!-- 1024x1024 Canvas Mount Point -->
         <div id="canvas-stage"></div>
 
@@ -185,7 +185,7 @@
 
     <!-- Right Control Sidebar -->
     <aside id="control-sidebar" class="w-full md:w-[370px] lg:w-[390px] h-[65vh] md:h-full glass-panel md:border-l border-t md:border-t-0 border-white/10 z-20 flex flex-col transition-transform duration-300 fixed md:static bottom-0 left-0 translate-y-0">
-        
+
         <!-- Sidebar Header -->
         <div class="px-5 py-4 border-b border-white/10 flex items-center justify-between shrink-0">
             <div class="flex items-center gap-2.5">
@@ -441,7 +441,7 @@
         function setup() {
             const cnv = createCanvas(CANVAS_SIZE, CANVAS_SIZE);
             cnv.parent('canvas-stage');
-            
+
             // Strictly enforce pixelDensity(1) so exported PNG is 1024x1024px
             pixelDensity(1);
             noiseSeed(state.seed);
