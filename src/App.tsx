@@ -10,12 +10,23 @@ import { NavigationHistory, type Visit } from './lib/navigation';
 import { filenameTitle } from './lib/note-filenames';
 import { articleOutline, type OutlineHeading } from './lib/outline';
 import { HistorySwipe, outlineScrollsArticle, wheelDistance } from './lib/gestures';
+import { PaperNotebook, isPaperPath } from './lib/paper-notebook';
+import { createPaperClient } from './lib/paper-native';
+import type { PaperClient, PaperFile } from './lib/paper-client';
+import PaperSettings from './components/PaperSettings';
 import AnimatedWordmark from './components/AnimatedWordmark';
 
 type PaletteAction = { id: string; label: string; detail: string; kind: 'note' | 'action'; run(): void | Promise<void> };
 const introduction = '# 余白から、はじめる。\n\n考えていることを、ひとつずつ。\n言葉にすると、少しだけ輪郭が見えてくる。\n\npure は、書くための静かな場所です。\n\n⌘ L でノートを探す。⌘ N で新しく書く。\n[思いついたこと] のように囲めば、タグになります。\n同じタグの文章を、まとめて見返せます。\n\n画像を置く。動画の URL を貼る。\n書いたものは、ふつうの Markdown として残ります。\n';
 
 export default function App() {
+  const [paperClient, setPaperClient] = createSignal<PaperClient>();
+  const [paperConnected, setPaperConnected] = createSignal(false);
+  const [paperStatus, setPaperStatus] = createSignal('未接続');
+  const [paperMatches, setPaperMatches] = createSignal<PaperFile[]>([]);
+  let paperNotebook: PaperNotebook | undefined;
+  let paperFileInput!: HTMLInputElement;
+  let pendingPaperFile: File | undefined;
   const [ready, setReady] = createSignal(false);
   const [notes, setNotes] = createSignal<Note[]>([]);
   const [activePath, setActivePath] = createSignal('');
@@ -216,7 +227,7 @@ export default function App() {
       loadedVersion = { text };
       const recovered = localStorage.getItem(journalKey(path));
       updateTitle(recovered ?? text);
-      editor = createEditor({ parent: host, text: recovered ?? text, storage, tags: existingTags, onChange: autosave, onReference: followReference, onError: report, onSave: () => void flush().then(() => report('保存しました。')).catch(error => report(String(error))) });
+      editor = createEditor({ parent: host, text: recovered ?? text, storage, imagesAllowed: !isPaperPath(path), tags: existingTags, onChange: autosave, onReference: followReference, onError: report, onSave: () => void flush().then(() => report(isPaperPath(path) ? `ローカルに保存しました。${paperStatus()}` : '保存しました。')).catch(error => report(String(error))) });
       bindOutline(editor.view);
       dirty = recovered !== null && recovered !== text;
       if (dirty) timer = setTimeout(() => void flush().catch(error => report(String(error))), 2000);
@@ -282,6 +293,48 @@ export default function App() {
       }
     } catch (error) { report(String(error)); }
   }
+  async function bindPaper(manager: StorageManager) {
+    const notebook = new PaperNotebook(manager.backend, paperClient() ?? null, () => void reloadNotes().catch(error => report(String(error))), status => {
+      setPaperStatus(status);
+      if (/失敗|変更があります|接続してください/.test(status)) report(status);
+    });
+    await notebook.initialize();
+    paperNotebook = notebook; manager.setPaperNotebook(notebook);
+  }
+  async function openPaper(path: string, original?: File) {
+    if (!paperClient()?.connected || !paperNotebook) throw new Error('設定から Dropbox Paper に接続してください。');
+    await flush();
+    const exported = await paperClient()!.export(path);
+    const file = original ?? (pendingPaperFile?.name === exported.file.name ? pendingPaperFile : undefined);
+    const imported = await paperNotebook.attach(exported, file ? { name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) } : undefined);
+    pendingPaperFile = undefined; setPaperMatches([]);
+    await reloadNotes(); await openNote(imported);
+  }
+  async function importPaperFile(file: File) {
+    if (!/\.paper$/i.test(file.name)) return;
+    pendingPaperFile = file;
+    if (!paperClient()?.connected) { openPalette(); showSettings(); report('設定の Dropbox Paper から接続してください。会社側の許可が必要な場合があります。'); return; }
+    if (file.size > 5 * 1024 * 1024) throw new Error('Paper の参照ファイルとしては大きすぎます。Dropbox 内のパスから開いてください。');
+    const matches = await paperClient()!.findByName(file.name);
+    if (!matches.length) throw new Error('同じ名前の Paper が見つかりません。⌘ L に Dropbox 内のフルパスを入力して開いてください。');
+    if (matches.length === 1) { await openPaper(matches[0].id, file); return; }
+    setPaperMatches(matches); openPalette(file.name);
+  }
+  function paperConnectionChanged() {
+    setPaperConnected(paperClient()?.connected ?? false);
+    if (paperConnected()) {
+      setPaperStatus('接続済み');
+      if (pendingPaperFile) void importPaperFile(pendingPaperFile).catch(error => report(String(error)));
+      else void paperNotebook?.refresh().then(() => reloadNotes()).catch(error => report(String(error)));
+    } else setPaperStatus('未接続。編集済みの本文はローカルに残っています');
+  }
+  async function recoverPaper() {
+    if (!paperNotebook || !isPaperPath(activePath())) return;
+    await flush();
+    const path = activePath();
+    await paperNotebook.reloadRemote(path); await openNote(path);
+    report('ローカル版を .paper/backups に残し、Paper を読み直しました。');
+  }
   async function openArticleWindow(path: string) {
     try {
       await flush(); path = storage.resolvePath(path);
@@ -299,6 +352,7 @@ export default function App() {
     clickTimer = setTimeout(() => { if (home() && !palette()) void openNote(path).catch(error => report(String(error))); }, doubleClickDelay + 30);
   }
   function openPalette(value = '') {
+    if (value !== pendingPaperFile?.name) setPaperMatches([]);
     setScreen('notes'); setQuery(value); setSelected(0); setPalette(true);
     void reloadNotes().catch(error => report(String(error)));
   }
@@ -332,6 +386,12 @@ export default function App() {
         await flush(); const path = await storage.createNote(title); await storage.saveNote(path, `# ${title}\n\n`); await openNote(path);
       }
     });
+    if (paperConnected()) {
+      if (/^\/.+\.paper$/i.test(value)) result.unshift({ id: 'paper-path', label: `Paper「${value}」を開く`, detail: 'Dropbox の同じ文書を編集', kind: 'action', run: () => openPaper(value) });
+      for (const file of paperMatches()) result.unshift({ id: `paper-${file.id}`, label: file.path_display ?? file.name, detail: 'この Paper を開く', kind: 'action', run: () => openPaper(file.id, pendingPaperFile) });
+    }
+    if (native) result.push({ id: 'paper-open', label: 'Paper ファイルを開く', detail: '⌘ O · 元の名前を維持して Dropbox と連携', kind: 'action', run: () => paperFileInput.click() });
+    if (isPaperPath(activePath())) result.push({ id: 'paper-recover', label: 'Paper を読み直す', detail: 'ローカルにバックアップを残して Dropbox の内容を読み直す', kind: 'action', run: recoverPaper });
     if (!home() || homeTag()) result.push({ id: 'home', label: 'すべての記事', detail: '更新の新しい順に並べる', kind: 'action', run: () => goHome() });
     result.push({ id: 'settings', label: '設定', detail: '保存する場所と、端末間の同期', kind: 'action', run: showSettings });
     return result;
@@ -362,7 +422,7 @@ export default function App() {
       if (next.folder !== settings()?.folder || next.imagesFolder !== settings()?.imagesFolder) {
         await relocateImages(settings()!, next);
         const manager = new StorageManager(await createBackend(next), native && next.syncEnabled ? new R2Backend(next) : null);
-        await manager.initialize();
+        await manager.initialize(); await bindPaper(manager);
         await persistSettings(next);
         clearOutline?.(); clearOutline = undefined; editor?.destroy(); editor = undefined; dirty = false;
         setSettings(next); bindStorage(manager);
@@ -383,7 +443,7 @@ export default function App() {
   function updateDraft(key: keyof Settings, value: string | boolean) { setDraft(previous => previous ? { ...previous, [key]: value } : null); }
   async function refreshFromDisk() {
     if (!ready() || busy()) return;
-    try { await flush(); await storage.refresh(); await storage.sync(); await reloadActiveAfterSync(); }
+    try { await flush(); await storage.refresh(); await storage.sync(); await paperNotebook?.refresh(); await reloadActiveAfterSync(); }
     catch (error) { report(String(error)); }
   }
   function scrollOutline(event: WheelEvent) {
@@ -408,6 +468,12 @@ export default function App() {
         const manager = new StorageManager(await createBackend(currentSettings));
         bindStorage(manager);
         await manager.initialize();
+        if (native) {
+          const client = createPaperClient();
+          try { await client.initialize(); setPaperClient(client); setPaperConnected(client.connected); setPaperStatus(client.connected ? '接続済み' : '未接続'); }
+          catch (error) { report(String(error)); setPaperClient(client); }
+        }
+        await bindPaper(manager);
         if (native && currentSettings.syncEnabled) { manager.setRemote(new R2Backend(currentSettings)); await manager.sync(); }
         await manager.migrateNoteNames();
         for (const [from, to] of Object.entries(manager.renamedPaths)) {
@@ -423,6 +489,7 @@ export default function App() {
           await reloadNotes();
         }
         setReady(true);
+        if (paperConnected()) void paperNotebook?.refresh().then(() => reloadActiveAfterSync()).catch(error => report(String(error)));
         document.title = 'pure';
         if (native && !mobile) {
           const { getCurrentWindow } = await import('@tauri-apps/api/window');
@@ -466,9 +533,10 @@ export default function App() {
       if ((event.metaKey || event.ctrlKey) && event.shiftKey && ['Backspace', 'Delete'].includes(event.key) && ready()) {
         event.preventDefault(); event.stopPropagation(); void deleteCurrent(); return;
       }
-      if ((event.metaKey || event.ctrlKey) && ['l', 'k', 'p', 'n', ','].includes(event.key.toLowerCase()) && ready()) {
+      if ((event.metaKey || event.ctrlKey) && ['l', 'k', 'p', 'n', 'o', ','].includes(event.key.toLowerCase()) && ready()) {
         event.preventDefault();
-        if (event.key === ',') { openPalette(); showSettings(); }
+        if (event.key.toLowerCase() === 'o') { if (native) paperFileInput.click(); else report('Paper の連携は Mac・iPhone アプリから利用できます。'); }
+        else if (event.key === ',') { openPalette(); showSettings(); }
         else if (event.key.toLowerCase() === 'n') void newPage().catch(error => report(String(error)));
         else palette() ? closePalette() : openPalette();
       }
@@ -498,16 +566,24 @@ export default function App() {
       if (handleSwipe(event, event.target instanceof Element ? event.target : null) && event.cancelable) event.preventDefault();
     };
     paper.addEventListener('wheel', wheel, { capture: true, passive: false });
+    const paperDrop = (event: DragEvent) => {
+      const file = [...(event.dataTransfer?.files ?? [])].find(file => /\.paper$/i.test(file.name));
+      if (!file) return;
+      event.preventDefault(); event.stopPropagation();
+      void importPaperFile(file).catch(error => report(String(error)));
+    };
+    const paperDrag = (event: DragEvent) => { if ([...(event.dataTransfer?.types ?? [])].includes('Files') && home()) event.preventDefault(); };
+    paper.addEventListener('drop', paperDrop, true); paper.addEventListener('dragover', paperDrag);
     window.addEventListener('keydown', keydown, true);
     const removeHomeScrollbar = scrollIndicator(homeScroller, homeScroller.parentElement!);
     document.addEventListener('visibilitychange', visibility);
     window.addEventListener('pagehide', pagehide);
     window.addEventListener('online', online);
     window.addEventListener('focus', online);
-    const retry = setInterval(() => { if (ready() && document.visibilityState === 'visible' && navigator.onLine) void storage.sync(); }, 60_000);
+    const retry = setInterval(() => { if (ready() && document.visibilityState === 'visible' && navigator.onLine) { void storage.sync(); void paperNotebook?.sync(); } }, 60_000);
     onCleanup(() => {
       disposed = true; clearTimeout(hintTimer); clearTimeout(clickTimer); clearTimeout(timer); clearTimeout(toastTimer); clearInterval(retry);
-      paper.removeEventListener('wheel', wheel, true);
+      paper.removeEventListener('wheel', wheel, true); paper.removeEventListener('drop', paperDrop, true); paper.removeEventListener('dragover', paperDrag);
       window.removeEventListener('keydown', keydown, true); document.removeEventListener('visibilitychange', visibility);
       window.removeEventListener('pagehide', pagehide); window.removeEventListener('online', online); window.removeEventListener('focus', online);
       removeHomeScrollbar(); unlistenStorage?.(); unlistenClose?.(); unlistenScale?.(); unlistenTrackpad?.(); clearOutline?.(); editor?.destroy();
@@ -522,6 +598,7 @@ export default function App() {
     if (ready() && touchStart && touch.clientX - touchStart.x > 75 && Math.abs(touch.clientY - touchStart.y) < 60) openPalette();
     touchStart = null;
   }}>
+    <input type="file" accept=".paper" hidden ref={paperFileInput} aria-label="Paper ファイルを選択" onChange={event => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ''; if (file) void importPaperFile(file).catch(error => report(String(error))); }} />
     <Show when={native && !mobile}><div class="native-title-region" data-tauri-drag-region /></Show>
     <section class="home-surface" hidden={!home()} aria-label="記事一覧">
       <div class="home-scroll" ref={homeScroller}>
@@ -569,6 +646,7 @@ export default function App() {
               <button class="text-button" type="button" onClick={() => void run({ id: 'sync', label: '', detail: '', kind: 'action', run: async () => { await flush(); await storage.sync(); } })}>今すぐ同期</button>
             </div></Show>
           </fieldset>
+          <Show when={native}><PaperSettings client={paperClient()} connected={paperConnected()} status={paperStatus()} onConnected={paperConnectionChanged} /></Show>
           <p class="settings-error" role="alert">{settingsError()}</p>
           <div class="settings-footer"><span>pure <span class="version">0.1</span></span><button type="submit" class="save-button" disabled={busy()}>{busy() ? '保存しています' : '設定を保存'}</button></div>
         </form>}>

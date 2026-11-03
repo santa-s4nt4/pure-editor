@@ -17,6 +17,7 @@ export interface EditorOptions {
   parent: HTMLElement;
   text: string;
   readOnly?: boolean;
+  imagesAllowed?: boolean;
   storage: StorageManager;
   tags(): readonly string[];
   onChange(text: string): void;
@@ -334,6 +335,7 @@ export function createEditor(options: EditorOptions): { view: EditorView; destro
   };
 
   const insertImages = (files: Promise<Blob[]> | Blob[], at: number, view: EditorView, replaceTo = at, fallbackText = '') => {
+    if (options.imagesAllowed === false) { if (files instanceof Promise) void files.catch(() => undefined); options.onError('Paper への画像の追加は Dropbox Paper 側で行ってください。'); return; }
     const id = crypto.randomUUID();
     view.dispatch({ effects: [addInsertion.of({ id, position: at }), addInsertion.of({ id: `${id}:end`, position: replaceTo })] });
     const operation = (async () => {

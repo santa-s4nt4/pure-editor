@@ -418,3 +418,34 @@ test('同じ位置からの往復スワイプと小さな矢印表示', async ({
   await expect(page).toHaveTitle('スワイプテスト — pure');
   await expect(page.locator('.history-swipe')).toHaveClass(/is-forward/);
 });
+
+test('Paper のオフライン編集でも元のファイル名と参照ファイルを維持する', async ({ page }) => {
+  const path = `Paper/${'a'.repeat(32)}/既存の名前.paper`;
+  await page.evaluate(async path => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => { const request = indexedDB.open('pure-notes', 1); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction('files', 'readwrite'); const store = transaction.objectStore('files');
+      const data = { version: 1, documents: [{ path, id: 'id:fixture', name: '既存の名前.paper', remotePath: '/企業/既存の名前.paper', markdown: '# Paper の記事\n\n本文', revision: 3, dirty: false, updatedAt: Date.now() }] };
+      store.put({ path: '.paper/documents.json', bytes: new TextEncoder().encode(JSON.stringify(data)), updatedAt: Date.now() });
+      store.put({ path, bytes: new TextEncoder().encode('original reference'), updatedAt: Date.now() });
+      transaction.oncomplete = () => resolve(); transaction.onerror = () => reject(transaction.error);
+    }); db.close();
+  }, path);
+  await page.reload();
+  await expect(page.locator('.writing-surface')).toHaveAttribute('aria-busy', 'false');
+  await page.getByRole('button', { name: 'Paper の記事', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: 'ノート本文' });
+  await editor.fill('# 編集した Paper\n\nオフラインの変更');
+  await page.waitForTimeout(2300);
+  await page.reload();
+  await page.getByRole('button', { name: '編集した Paper', exact: true }).click();
+  await expect(editor).toContainText('オフラインの変更');
+  const result = await page.evaluate(async path => {
+    const db = await new Promise<IDBDatabase>(resolve => { const request = indexedDB.open('pure-notes', 1); request.onsuccess = () => resolve(request.result); });
+    const get = (path: string) => new Promise<any>(resolve => { const request = db.transaction('files').objectStore('files').get(path); request.onsuccess = () => resolve(request.result); });
+    const cache = JSON.parse(new TextDecoder().decode((await get('.paper/documents.json')).bytes));
+    const original = new TextDecoder().decode((await get(path)).bytes);
+    db.close(); return { path: cache.documents[0].path, dirty: cache.documents[0].dirty, original };
+  }, path);
+  expect(result).toEqual({ path, dirty: true, original: 'original reference' });
+});

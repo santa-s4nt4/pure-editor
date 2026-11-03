@@ -2,6 +2,7 @@ import { Show, createSignal, onCleanup, onMount } from 'solid-js';
 import { invoke } from '@tauri-apps/api/core';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { createEditor } from '../lib/editor';
+import { PaperNotebook, isPaperPath } from '../lib/paper-notebook';
 import { filenameTitle } from '../lib/note-filenames';
 import { createBackend, loadSettings, native, safeRelativePath, StorageManager } from '../lib/storage';
 import { fromMarkdown, isExternalUrl, noteTitle } from '../lib/transformer';
@@ -16,7 +17,7 @@ export default function ArticleWindow() {
     void (async () => {
       try {
         let path = safeRelativePath(new URLSearchParams(location.search).get('article') ?? '');
-        if (!/\.md$/i.test(path)) throw new Error('記事のパスが不正です。');
+        if (!/\.md$/i.test(path) && !isPaperPath(path)) throw new Error('記事のパスが不正です。');
         const settings = await loadSettings();
         const backend = await createBackend(settings);
         const aliases = await backend.read('_note-renames.json');
@@ -25,10 +26,18 @@ export default function ArticleWindow() {
           const seen = new Set<string>();
           while (moves[path] && !seen.has(path)) { seen.add(path); path = safeRelativePath(moves[path]); }
         }
-        const bytes = await backend.read(path);
-        if (!bytes) throw new Error('記事が見つかりません。');
+        let text: string;
+        if (isPaperPath(path)) {
+          const notebook = new PaperNotebook(backend, null); await notebook.initialize();
+          const content = await notebook.readNote(path);
+          if (content === null) throw new Error('Paper がローカルに保存されていません。');
+          text = content;
+        } else {
+          const bytes = await backend.read(path);
+          if (!bytes) throw new Error('記事が見つかりません。');
+          text = fromMarkdown(new TextDecoder().decode(bytes));
+        }
         if (disposed) return;
-        const text = fromMarkdown(new TextDecoder().decode(bytes));
         const title = noteTitle(text, filenameTitle(path));
         document.title = `${title} — pure`;
         document.documentElement.dataset.theme = settings.theme ?? 'auto';
