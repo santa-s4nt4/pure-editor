@@ -8,6 +8,7 @@ import { StorageManager, R2Backend, chooseFolder, createBackend, loadSettings, p
 import { scrollIndicator } from './lib/scrollbar';
 import { NavigationHistory, type Visit } from './lib/navigation';
 import { articleOutline, type OutlineHeading } from './lib/outline';
+import { HistorySwipe, outlineScrollsArticle, wheelDistance } from './lib/gestures';
 import AnimatedWordmark from './components/AnimatedWordmark';
 
 type PaletteAction = { id: string; label: string; detail: string; kind: 'note' | 'action'; run(): void | Promise<void> };
@@ -38,6 +39,7 @@ export default function App() {
   const [outlineGutter, setOutlineGutter] = createSignal(0);
   const outlineLevel = createMemo(() => Math.min(6, ...outline().map(heading => heading.level)));
   const existingTags = createMemo(() => notes().flatMap(note => note.tags));
+  let paper!: HTMLElement;
   let host!: HTMLDivElement;
   let homeScroller!: HTMLDivElement;
   let dialog!: HTMLDialogElement;
@@ -357,6 +359,16 @@ export default function App() {
     try { await flush(); await storage.refresh(); await storage.sync(); await reloadActiveAfterSync(); }
     catch (error) { report(String(error)); }
   }
+  function scrollOutline(event: WheelEvent) {
+    if (!editor || event.ctrlKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+    const aside = event.currentTarget as HTMLElement;
+    const panel = aside.querySelector<HTMLElement>('.outline-panel');
+    if (!panel || !outlineScrollsArticle(panel.contains(event.target as Node), panel.clientHeight, panel.scrollHeight)) return;
+    event.preventDefault();
+    const scroller = editor.view.scrollDOM;
+    scroller.scrollTop += wheelDistance(event.deltaY, event.deltaMode, editor.view.defaultLineHeight, scroller.clientHeight);
+  }
+
   onMount(() => {
     let unlistenClose: (() => void) | undefined;
     let unlistenScale: (() => void) | undefined;
@@ -423,6 +435,20 @@ export default function App() {
     const visibility = () => { if (document.visibilityState === 'visible') void refreshFromDisk(); else void flush().catch(error => report(String(error))); };
     const pagehide = () => { void flush().catch(() => undefined); };
     const online = () => { void refreshFromDisk(); };
+    const swipe = new HistorySwipe();
+    const wheel = (event: WheelEvent) => {
+      if (mobile || !ready() || busy() || palette()) { swipe.reset(); return; }
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest('input, textarea, select, .cm-tooltip')) { swipe.reset(); return; }
+      // Preserve horizontal scrolling inside code blocks and other scrollable regions.
+      for (let node = target; node && node !== paper; node = node.parentElement) {
+        if (node.scrollWidth > node.clientWidth + 1 && /auto|scroll/.test(getComputedStyle(node).overflowX)) { swipe.reset(); return; }
+      }
+      const result = swipe.feed(event, performance.now());
+      if (result.claim && event.cancelable) event.preventDefault();
+      if (result.direction) void travel(result.direction);
+    };
+    paper.addEventListener('wheel', wheel, { capture: true, passive: false });
     window.addEventListener('keydown', keydown, true);
     const removeHomeScrollbar = scrollIndicator(homeScroller, homeScroller.parentElement!);
     document.addEventListener('visibilitychange', visibility);
@@ -432,13 +458,14 @@ export default function App() {
     const retry = setInterval(() => { if (ready() && document.visibilityState === 'visible' && navigator.onLine) void storage.sync(); }, 60_000);
     onCleanup(() => {
       disposed = true; clearTimeout(timer); clearTimeout(toastTimer); clearInterval(retry);
+      paper.removeEventListener('wheel', wheel, true);
       window.removeEventListener('keydown', keydown, true); document.removeEventListener('visibilitychange', visibility);
       window.removeEventListener('pagehide', pagehide); window.removeEventListener('online', online); window.removeEventListener('focus', online);
       removeHomeScrollbar(); unlistenStorage?.(); unlistenClose?.(); unlistenScale?.(); clearOutline?.(); editor?.destroy();
     });
   });
 
-  return <main class="paper" aria-label="pure" onTouchStart={event => {
+  return <main ref={paper} class="paper" aria-label="pure" onTouchStart={event => {
     const touch = event.touches[0];
     touchStart = touch.clientX < 28 ? { x: touch.clientX, y: touch.clientY } : null;
   }} onTouchEnd={event => {
@@ -457,7 +484,7 @@ export default function App() {
     </section>
     <div class="writing-surface" hidden={home()} ref={host} aria-busy={!ready()} />
     <Show when={ready() && !home() && !mobile && outline().length > 0}>
-      <aside class="article-outline" style={{ '--toc-trigger-width': `${outlineGutter()}px` }}>
+      <aside class="article-outline" onWheel={scrollOutline} style={{ '--toc-trigger-width': `${outlineGutter()}px` }}>
         <button class="outline-trigger" type="button" aria-label="目次を表示" onClick={event => event.currentTarget.parentElement?.querySelector<HTMLButtonElement>('nav button')?.focus()} />
         <nav class="outline-panel" aria-label="記事の目次"><For each={outline()}>{heading => <button type="button" class="outline-heading" classList={{ 'is-current': heading.from === outlineCurrent() }} aria-current={heading.from === outlineCurrent() ? 'location' : undefined} style={{ '--toc-depth': String(heading.level - outlineLevel()) }} onClick={() => jumpToHeading(heading)}>{heading.title}</button>}</For></nav>
       </aside>
