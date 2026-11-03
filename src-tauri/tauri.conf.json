@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "pure",
+  "version": "0.1.0",
+  "identifier": "jp.pure.editor",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [{
+      "label": "main",
+      "title": "pure",
+      "width": 1060,
+      "height": 800,
+      "minWidth": 340,
+      "minHeight": 440,
+      "titleBarStyle": "Overlay",
+      "hiddenTitle": true,
+      "backgroundColor": "#ffffff",
+      "dragDropEnabled": false
+    }],
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost http://localhost:1420 ws://localhost:1420; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; frame-src https://www.youtube-nocookie.com https://player.vimeo.com http://127.0.0.1:*; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "category": "Productivity",
+    "shortDescription": "ただ、書く。",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "macOS": { "minimumSystemVersion": "14.5" },
+    "iOS": { "minimumSystemVersion": "17.5" }
+  },
+  "plugins": { "fs": { "requireLiteralLeadingDot": false } }
+}

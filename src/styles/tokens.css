@@ -1,0 +1,60 @@
+:root {
+  color-scheme: light dark;
+
+  /* ダークは stone の参考画像に合わせたチャコールと、やわらかい白。 */
+  --paper: light-dark(#fff, #46474b);
+  --paper-raised: light-dark(#fff, #4b4c50);
+  --text-ink: light-dark(#000, #f2f1ee);
+  --text-muted: light-dark(#777, #c2c2c5);
+  --text-faint: light-dark(#aaa, #a6a7ad);
+  --text-accent: var(--text-faint);
+  --text-error: light-dark(#985044, #e1aaa4);
+  --selection: light-dark(#d9d9d9, #6a6b73);
+  --surface-hover: color-mix(in oklch, var(--text-ink) 5%, transparent);
+  --veil: color-mix(in oklch, var(--paper) 78%, transparent);
+
+  /* 本文のサイズは画面に合わせて少しだけ伸縮します。 */
+  /* stone の参照記事：狭い画面 14px / 広い画面 15px、行間 2、字間 .04em。 */
+  --font-size-body: clamp(0.875rem, 0.834rem + 0.17vw, 0.9375rem);
+  --font-size-interface: var(--font-size-body);
+  --font-size-small: 0.82em;
+  --font-family-body: 'Konshoku Mincho', 'Yu Mincho', 'Hiragino Mincho ProN', 'Times New Roman', serif;
+  /* 欧文のサイズ補正は @font-face の size-adjust: 106% で行います。
+     CSS の仕様上、そこでは変数を使えません。変更箇所は typography.css の冒頭です。 */
+  --line-height-body: 2;
+  --letter-spacing-body: 0.04em;
+  --line-height-interface: 1.65;
+  --letter-spacing-interface: 0.045em;
+  --heading-1-size: 1.4em;
+  --heading-2-size: 1.25em;
+  --heading-3-size: 1.08em;
+
+  /* 通常幅は約80字。広いウィンドウでは本文も一緒に広がります。 */
+  --measure: max(80ch, calc(100vw - 26rem));
+  /* 紙の余白。狭い画面でも左右に呼吸できる空間を残します。 */
+  --page-gutter: clamp(1.5rem, 6vw, 5rem);
+  --page-top: clamp(4rem, 8dvh, 6rem);
+  --page-bottom: clamp(7rem, 22dvh, 15rem);
+  --embed-gap: 1.1em;
+  --palette-size: 36rem;
+  --palette-padding: clamp(1.2rem, 3vw, 2rem);
+  --palette-position: clamp(2rem, 15dvh, 10rem);
+  /* 設定は縦に長いため、通常の検索より上から表示します。 */
+  --settings-position: clamp(1.5rem, 6dvh, 4rem);
+  --palette-radius: 0.35rem;
+  --control-radius: 0.2rem;
+  --focus-ring: 0.09rem;
+  --motion-duration: 160ms;
+  --motion-easing: ease-out;
+  /* トップ一覧は余白だけで区切る、小さなタイトルのグリッド。 */
+  --home-measure: 75rem;
+  --home-column: 13rem;
+  --home-column-gap: clamp(2rem, 4vw, 4rem);
+  --home-row-gap: 2.3rem;
+  --scrollbar-size: 0.1875rem;
+  /* 箇条書きの点は文字・画像・動画で同じ寸法を共用します。 */
+  --bullet-size: 0.2rem;
+  --checkbox-size: 0.8rem;
+}
+:root[data-theme='light'] { color-scheme: light; }
+:root[data-theme='dark'] { color-scheme: dark; }

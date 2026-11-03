@@ -1,0 +1,86 @@
+/* 欧文：游明朝の仮想ボディに合わせ、Times New Roman を 106% に補正。
+   size-adjust は @font-face のディスクリプタなので var() を使用できません。 */
+@font-face {
+  font-family: 'Konshoku Mincho';
+  src: local('Times New Roman'), local('TimesNewRomanPSMT');
+  font-style: normal;
+  font-weight: 400;
+  size-adjust: 106%;
+  unicode-range: U+0000-007F, U+00A0-00FF, U+0100-024F, U+2000-2027;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Konshoku Mincho';
+  src: local('Times New Roman Bold'), local('TimesNewRomanPS-BoldMT');
+  font-style: normal;
+  font-weight: 600 900;
+  size-adjust: 106%;
+  unicode-range: U+0000-007F, U+00A0-00FF, U+0100-024F, U+2000-2027;
+  font-display: swap;
+}
+/* 和文：游明朝を優先し、iOS ではヒラギノ明朝へ自然に繋ぎます。 */
+@font-face {
+  font-family: 'Konshoku Mincho';
+  src: local('YuMincho'), local('Yu Mincho'), local('Hiragino Mincho ProN'), local('HiraMinProN-W3');
+  font-style: normal;
+  font-weight: 400;
+  unicode-range: U+2028-206F, U+2E80-2FFF, U+3000-30FF, U+31F0-31FF, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FE30-FE4F, U+FF00-FFEF, U+20000-323AF;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Konshoku Mincho';
+  src: local('YuMincho-Demibold'), local('Yu Mincho Demibold'), local('Hiragino Mincho ProN W6'), local('HiraMinProN-W6');
+  font-style: normal;
+  font-weight: 600 900;
+  unicode-range: U+2028-206F, U+2E80-2FFF, U+3000-30FF, U+31F0-31FF, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FE30-FE4F, U+FF00-FFEF, U+20000-323AF;
+  font-display: swap;
+}
+
+html {
+  font-family: var(--font-family-body);
+  font-feature-settings: 'palt' 1, 'kern' 1;
+  font-kerning: normal;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+body { color: var(--text-ink); }
+:where(button, input, select) { font: inherit; letter-spacing: inherit; }
+:where(h1, h2, h3) { text-wrap: balance; font-weight: 400; }
+
+.cm-editor {
+  font-size: var(--font-size-body);
+  letter-spacing: var(--letter-spacing-body);
+
+  & .cm-scroller { font-family: var(--font-family-body); line-height: var(--line-height-body); }
+  & .cm-content { caret-color: var(--text-ink); }
+  & .cm-line { text-wrap: stable; overflow-wrap: anywhere; }
+  & .cm-placeholder { color: var(--text-faint); }
+  & :is(.cm-heading-1, .cm-heading-2, .cm-heading-3) { font-size: inherit; }
+  & .cm-heading-level-1 { font-size: var(--heading-1-size); }
+  & .cm-heading-level-2 { font-size: var(--heading-2-size); }
+  & .cm-heading-level-3 { font-size: var(--heading-3-size); }
+  & :is(.cm-heading-1, .cm-heading-2, .cm-heading-3) { text-wrap: balance; }
+  & .cm-strong { font-weight: 600; }
+  & .cm-emphasis { font-style: italic; }
+  & :is(.cm-code, .cm-quote) { color: var(--text-muted); }
+  & .cm-mark { color: var(--text-faint); }
+  & :is(.cm-scrapbox-link, .cm-markdown-link) {
+    color: var(--text-accent);
+    text-decoration: none;
+    cursor: pointer;
+  }
+  & .cm-hashtag { color: var(--text-accent); cursor: pointer; }
+  & .cm-url { color: var(--text-accent); }
+  & :is(.cm-scrapbox-link, .cm-hashtag):hover { text-decoration-color: currentColor; }
+  & .cm-selectionBackground { background: var(--selection); }
+  & ::selection { background: var(--selection); }
+}
+.cm-editor.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground { background: var(--selection); }
+.cm-heading-line[data-empty-title]::before { content: 'タイトル'; color: var(--text-faint); position: absolute; pointer-events: none; }
+.cm-reference-source :is(.cm-markdown-link, .cm-url, .cm-mark) { cursor: text; }
+.cm-task-done { text-decoration: line-through; color: var(--text-faint); }
+.palette { font-size: var(--font-size-interface); line-height: var(--line-height-interface); letter-spacing: var(--letter-spacing-interface); }
+.option-name { text-wrap: balance; }
+.option-detail { color: var(--text-muted); font-size: var(--font-size-small); }
+.palette-footer { font-size: var(--font-size-small); color: var(--text-faint); }
+.setting-description { font-size: var(--font-size-small); color: var(--text-muted); text-wrap: pretty; }
