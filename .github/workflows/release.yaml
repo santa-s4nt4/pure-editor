@@ -64,37 +64,15 @@ jobs:
             npm run tauri ios init -- --ci
           fi
 
-      - name: Build and Package Unsigned iOS App
+      - name: Build Unsigned iOS IPA
         run: |
-          # Xcode の Tauri Build Rust Code フェーズで Rust も含めてビルドします。
-          cd src-tauri/gen/apple
-          PROJECT=$(find . -maxdepth 1 -name '*.xcodeproj' -print -quit)
-          test -n "$PROJECT"
-          SCHEME=$(xcodebuild -project "$PROJECT" -list -json | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["project"]["schemes"][0])')
-          echo "Using Xcode Project: $PROJECT, Scheme: $SCHEME"
+          # Tauri CLI が Xcode の Rust ビルドフェーズ向け設定サーバーを提供します。
+          npm run tauri ios build -- --ci --no-sign --target aarch64
 
-          xcodebuild -project "$PROJECT" \
-            -scheme "$SCHEME" \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            -derivedDataPath build_unsigned \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            DEVELOPMENT_TEAM="" \
-            build
-
-          cd ../../..
-          IOS_APP=$(find src-tauri/gen/apple/build_unsigned/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" -type d -print -quit)
-          test -n "$IOS_APP"
-          echo "Found iOS app at: $IOS_APP"
-
-          # iOSの標準 .ipa 構造（Payload/AppName.app）に固める
-          rm -rf Payload
-          mkdir -p Payload
-          cp -R "$IOS_APP" Payload/
-          ditto -c -k --sequesterRsrc --keepParent Payload pure-ios-unsigned.ipa
+          IOS_IPA=$(find src-tauri/gen/apple/build/arm64 -maxdepth 1 -name "*.ipa" -type f -print -quit)
+          test -n "$IOS_IPA"
+          cp "$IOS_IPA" pure-ios-unsigned.ipa
+          ls -lh pure-ios-unsigned.ipa
 
       # ==========================================
       # 3. GitHub Releases へ両方アップロード
