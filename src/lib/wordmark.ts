@@ -191,4 +191,3 @@ export function wordmarkBitmapSize(width: number, height: number, deviceRatio: n
   const ratio = Math.min(3, Math.max(1, deviceRatio || 1));
   return [Math.ceil(width * ratio), Math.ceil(height * ratio)];
 }
-
