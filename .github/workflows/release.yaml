@@ -1,0 +1,113 @@
+name: Build and Release (macOS & iOS)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: # GitHubのActionsタブから手動実行も可能
+
+permissions:
+  contents: write # Releasesの作成・ファイルアップロードに必須
+
+jobs:
+  build-and-release:
+    runs-on: macos-15 # Apple Silicon + macOS 15 / Xcode 環境
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+          cache: 'npm'
+
+      - name: Setup Rust (macOS & iOS targets)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,aarch64-apple-ios
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        run: npm test
+
+      # ==========================================
+      # 1. macOS App (.app -> pure-macos.zip)
+      # ==========================================
+      - name: Build Tauri macOS App
+        run: npm run tauri build -- --bundles app
+
+      - name: Ad-hoc Sign and Package macOS ZIP
+        run: |
+          APP_PATH=$(find src-tauri/target/release/bundle/macos -maxdepth 1 -name "*.app" | head -n 1)
+          echo "Found macOS app at: $APP_PATH"
+
+          # Apple Developer ID が不要なアドホック署名を付与
+          codesign --force --deep --sign - "$APP_PATH"
+
+          # シンボリックリンクや実行権限を保持したまま圧縮
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" pure-macos.zip
+
+      # ==========================================
+      # 2. iOS App (Unsigned .ipa for SideStore/AltStore)
+      # ==========================================
+      - name: Initialize iOS Xcode Project
+        run: |
+          if [ ! -d "src-tauri/gen/apple" ]; then
+            npm run tauri ios init -- --ci
+          fi
+
+      - name: Build and Package Unsigned iOS App
+        run: |
+          # Xcode の Tauri Build Rust Code フェーズで Rust も含めてビルドします。
+          cd src-tauri/gen/apple
+          PROJECT=$(find . -maxdepth 1 -name '*.xcodeproj' -print -quit)
+          test -n "$PROJECT"
+          SCHEME=$(xcodebuild -project "$PROJECT" -list -json | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["project"]["schemes"][0])')
+          echo "Using Xcode Project: $PROJECT, Scheme: $SCHEME"
+
+          xcodebuild -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build_unsigned \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            build
+
+          cd ../../..
+          IOS_APP=$(find src-tauri/gen/apple/build_unsigned/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" -type d -print -quit)
+          test -n "$IOS_APP"
+          echo "Found iOS app at: $IOS_APP"
+
+          # iOSの標準 .ipa 構造（Payload/AppName.app）に固める
+          rm -rf Payload
+          mkdir -p Payload
+          cp -R "$IOS_APP" Payload/
+          ditto -c -k --sequesterRsrc --keepParent Payload pure-ios-unsigned.ipa
+
+      # ==========================================
+      # 3. GitHub Releases へ両方アップロード
+      # ==========================================
+      - name: Upload macOS ZIP and iOS IPA to GitHub Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="latest-build"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" pure-macos.zip pure-ios-unsigned.ipa --clobber
+          else
+            gh release create "$TAG" pure-macos.zip pure-ios-unsigned.ipa \
+              --title "pure (Latest macOS & iOS Build)" \
+              --notes "mainブランチから自動ビルドされた最新のmacOS版（pure-macos.zip）およびiOS未署名版（pure-ios-unsigned.ipa）です。"
+          fi
