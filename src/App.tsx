@@ -1,11 +1,14 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { invoke } from '@tauri-apps/api/core';
+import { EditorView } from '@codemirror/view';
 import { createEditor } from './lib/editor';
 import { isExternalUrl, noteTitle, pagePath, type Reference } from './lib/transformer';
 import { StorageManager, R2Backend, chooseFolder, createBackend, loadSettings, persistSettings, relocateImages, validateR2, mobile, native, type Note, type Settings } from './lib/storage';
 import { scrollIndicator } from './lib/scrollbar';
 import { NavigationHistory, type Visit } from './lib/navigation';
+import { articleOutline, type OutlineHeading } from './lib/outline';
+import AnimatedWordmark from './components/AnimatedWordmark';
 
 type PaletteAction = { id: string; label: string; detail: string; kind: 'note' | 'action'; run(): void | Promise<void> };
 const introduction = '# 余白から、はじめる。\n\n考えていることを、ひとつずつ。\n言葉にすると、少しだけ輪郭が見えてくる。\n\npure は、書くための静かな場所です。\n\n⌘ L でノートを探す。⌘ N で新しく書く。\n[思いついたこと] のように囲めば、タグになります。\n同じタグの文章を、まとめて見返せます。\n\n画像を置く。動画の URL を貼る。\n書いたものは、ふつうの Markdown として残ります。\n';
@@ -30,6 +33,10 @@ export default function App() {
   const [syncStatus, setSyncStatus] = createSignal('同期はオフです');
   const [settingsError, setSettingsError] = createSignal('');
   const [startupError, setStartupError] = createSignal('');
+  const [outline, setOutline] = createSignal<OutlineHeading[]>([]);
+  const [outlineCurrent, setOutlineCurrent] = createSignal<number | null>(null);
+  const [outlineGutter, setOutlineGutter] = createSignal(0);
+  const outlineLevel = createMemo(() => Math.min(6, ...outline().map(heading => heading.level)));
   let host!: HTMLDivElement;
   let homeScroller!: HTMLDivElement;
   let dialog!: HTMLDialogElement;
@@ -47,6 +54,8 @@ export default function App() {
   let refreshing = false;
   let touchStart: { x: number; y: number } | null = null;
   let creating = false;
+  let clearOutline: (() => void) | undefined;
+  let measureOutline = () => {};
   const history = new NavigationHistory();
   let navigatingHistory = false;
   createEffect(() => {
@@ -139,6 +148,44 @@ export default function App() {
   function updateTitle(text: string) {
     const title = noteTitle(text, activePath().replace(/\.md$/, '') || '無題');
     setActiveTitle(title); document.title = `${title} — pure`;
+    if (!mobile) { setOutline(articleOutline(text)); measureOutline(); }
+  }
+  function bindOutline(view: EditorView) {
+    if (mobile) return;
+    let frame = 0;
+    const measure = () => {
+      frame = 0;
+      const bounds = view.contentDOM.getBoundingClientRect();
+      setOutlineGutter(Math.max(0, bounds.left - host.getBoundingClientRect().left - 12));
+      const top = view.scrollDOM.getBoundingClientRect().top + 80;
+      let current = outline()[0]?.from ?? null;
+      for (const heading of outline()) {
+        const position = Math.min(heading.from, view.state.doc.length);
+        if (view.documentTop + view.lineBlockAt(position).top > top) break;
+        current = heading.from;
+      }
+      setOutlineCurrent(current);
+    };
+    const schedule = () => { if (!frame) frame = requestAnimationFrame(measure); };
+    measureOutline = schedule;
+    const observer = new ResizeObserver(schedule); observer.observe(view.contentDOM);
+    view.scrollDOM.addEventListener('scroll', schedule, { passive: true });
+    window.addEventListener('resize', schedule);
+    schedule();
+    clearOutline = () => {
+      cancelAnimationFrame(frame); observer.disconnect();
+      view.scrollDOM.removeEventListener('scroll', schedule); window.removeEventListener('resize', schedule);
+      measureOutline = () => {};
+    };
+  }
+  function jumpToHeading(heading: OutlineHeading) {
+    if (!editor) return;
+    const view = editor.view;
+    const line = view.state.doc.lineAt(Math.min(heading.from, view.state.doc.length));
+    const prefix = /^(?: {0,3}#{1,6}[ \t]+)/.exec(line.text)?.[0].length ?? 0;
+    const position = line.from + prefix;
+    view.dispatch({ selection: { anchor: position }, effects: EditorView.scrollIntoView(position, { y: 'start', yMargin: 72 }) });
+    view.focus(); setOutlineCurrent(heading.from); measureOutline();
   }
   async function openNote(path: string, restore?: Visit) {
     const next = navigationTask.catch(() => undefined).then(async () => {
@@ -146,13 +193,14 @@ export default function App() {
       const text = await storage.readNote(path);
       if (text === null) throw new Error('ノートが見つかりません。');
       if (!restore) history.push({ kind: 'note', path }, currentVisit());
-      editor?.destroy();
+      clearOutline?.(); clearOutline = undefined; editor?.destroy();
       setHome(false);
       setActivePath(path);
       loadedVersion = { text };
       const recovered = localStorage.getItem(journalKey(path));
       updateTitle(recovered ?? text);
       editor = createEditor({ parent: host, text: recovered ?? text, storage, onChange: autosave, onReference: followReference, onError: report, onSave: () => void flush().then(() => report('保存しました。')).catch(error => report(String(error))) });
+      bindOutline(editor.view);
       dirty = recovered !== null && recovered !== text;
       if (dirty) timer = setTimeout(() => void flush().catch(error => report(String(error))), 2000);
       else localStorage.removeItem(journalKey(path));
@@ -172,7 +220,7 @@ export default function App() {
   async function goHome(tag = '', restore?: Visit) {
     await flush();
     if (!restore) history.push({ kind: 'home', tag }, currentVisit());
-    editor?.destroy(); editor = undefined; dirty = false;
+    clearOutline?.(); clearOutline = undefined; editor?.destroy(); editor = undefined; dirty = false;
     setActivePath(''); setHome(true); setHomeTag(tag); setHomeQuery(restore?.query ?? ''); document.title = tag ? `${tag} — pure` : 'pure'; closePalette(); await reloadNotes();
     requestAnimationFrame(() => { if (home()) homeScroller.scrollTop = restore?.scroll ?? 0; });
   }
@@ -286,7 +334,7 @@ export default function App() {
         const manager = new StorageManager(await createBackend(next), native && next.syncEnabled ? new R2Backend(next) : null);
         await manager.initialize();
         await persistSettings(next);
-        editor?.destroy(); editor = undefined; dirty = false;
+        clearOutline?.(); clearOutline = undefined; editor?.destroy(); editor = undefined; dirty = false;
         setSettings(next); bindStorage(manager);
         await reloadNotes();
         setActivePath(''); setHome(true); setHomeTag(''); history.reset(); document.title = 'pure'; closePalette();
@@ -385,7 +433,7 @@ export default function App() {
       disposed = true; clearTimeout(timer); clearTimeout(toastTimer); clearInterval(retry);
       window.removeEventListener('keydown', keydown, true); document.removeEventListener('visibilitychange', visibility);
       window.removeEventListener('pagehide', pagehide); window.removeEventListener('online', online); window.removeEventListener('focus', online);
-      removeHomeScrollbar(); unlistenStorage?.(); unlistenClose?.(); unlistenScale?.(); editor?.destroy();
+      removeHomeScrollbar(); unlistenStorage?.(); unlistenClose?.(); unlistenScale?.(); clearOutline?.(); editor?.destroy();
     });
   });
 
@@ -400,13 +448,19 @@ export default function App() {
     <Show when={native && !mobile}><div class="native-title-region" data-tauri-drag-region /></Show>
     <section class="home-surface" hidden={!home()} aria-label="記事一覧">
       <div class="home-scroll" ref={homeScroller}>
-        <header class="home-heading"><h1>{homeTag() || 'pure'}</h1></header>
+        <header class="home-heading"><h1><Show when={!homeTag()} fallback={homeTag()}><AnimatedWordmark active={home() && !palette()} /></Show></h1></header>
         <div class="home-search"><input type="search" aria-label="記事を探す" placeholder="タイトル、タグで探す" value={homeQuery()} onInput={event => setHomeQuery(event.currentTarget.value)} /><Show when={homeQuery()}><button type="button" onClick={() => setHomeQuery('')}>すべて</button></Show></div>
         <div class="note-grid"><For each={homeNotes()}>{note => <article class="note-card"><button class="note-title" type="button" onClick={() => void openNote(note.path).catch(error => report(String(error)))}>{note.title}</button><div class="note-tags"><For each={note.tags.slice(0, 3)}>{tag => <button type="button" onClick={() => void followReference({ kind: 'tag', value: tag, from: 0, to: 0 })}>{tag}</button>}</For><Show when={note.tags.length > 3}><span class="tags-more" title={note.tags.slice(3).join('、')}>…</span></Show></div></article>}</For></div>
         <Show when={ready() && homeNotes().length === 0}><p class="home-empty">{homeQuery() ? '見つかりませんでした。' : 'まだ、何も書かれていません。'}</p></Show>
       </div>
     </section>
     <div class="writing-surface" hidden={home()} ref={host} aria-busy={!ready()} />
+    <Show when={ready() && !home() && !mobile && outline().length > 0}>
+      <aside class="article-outline" style={{ '--toc-trigger-width': `${outlineGutter()}px` }}>
+        <button class="outline-trigger" type="button" aria-label="目次を表示" onClick={event => event.currentTarget.parentElement?.querySelector<HTMLButtonElement>('nav button')?.focus()} />
+        <nav class="outline-panel" aria-label="記事の目次"><For each={outline()}>{heading => <button type="button" class="outline-heading" classList={{ 'is-current': heading.from === outlineCurrent() }} aria-current={heading.from === outlineCurrent() ? 'location' : undefined} style={{ '--toc-depth': String(heading.level - outlineLevel()) }} onClick={() => jumpToHeading(heading)}>{heading.title}</button>}</For></nav>
+      </aside>
+    </Show>
     <Show when={startupError()}><div class="startup-message" role="alert"><p>ノートを開けませんでした。</p><p>{startupError()}</p><button type="button" onClick={() => location.reload()}>もう一度開く</button></div></Show>
     <Show when={ready()}><button class="palette-trigger" type="button" aria-label="ノートを開く" title="ノートを開く（⌘ L）" onClick={() => openPalette()}><span aria-hidden="true">···</span></button></Show>
     <dialog class="palette" ref={dialog} aria-label={screen() === 'notes' ? 'ノートとコマンド' : '設定'} onCancel={event => { event.preventDefault(); if (!busy()) closePalette(); }} onClick={event => { if (event.target === dialog && !busy()) closePalette(); }}>

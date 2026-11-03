@@ -1,0 +1,966 @@
+<!DOCTYPE html>
+<html lang="ja" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TYPE // HATCH : "P" — 1024x1024 Monochrome Hatching Studio</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- p5.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        body {
+            background-color: #09090b;
+            color: #f4f4f5;
+            overflow: hidden;
+            user-select: none;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* Custom Range Slider Styling (Monochrome Edition) */
+        input[type="range"] {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 100%;
+            height: 5px;
+            background: rgba(255, 255, 255, 0.14);
+            border-radius: 999px;
+            outline: none;
+            transition: background 0.2s;
+        }
+        input[type="range"]:hover {
+            background: rgba(255, 255, 255, 0.24);
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: #f4f4f5;
+            cursor: pointer;
+            border: 2px solid #18181b;
+            box-shadow: 0 0 8px rgba(255, 255, 255, 0.4);
+            transition: transform 0.15s ease, background-color 0.15s ease;
+        }
+        input[type="range"]::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+            background: #ffffff;
+        }
+        input[type="range"]::-moz-range-thumb {
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: #f4f4f5;
+            cursor: pointer;
+            border: 2px solid #18181b;
+            box-shadow: 0 0 8px rgba(255, 255, 255, 0.4);
+            transition: transform 0.15s ease;
+        }
+
+        /* Custom Scrollbar for Sidebar */
+        .custom-scroll::-webkit-scrollbar {
+            width: 5px;
+        }
+        .custom-scroll::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .custom-scroll::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 999px;
+        }
+        .custom-scroll::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        /* Glassmorphism panel */
+        .glass-panel {
+            background: rgba(14, 14, 17, 0.88);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        /* Strictly keep 1024x1024 buffer scaled cleanly inside viewport */
+        #canvas-stage {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            height: 100%;
+            padding: 4.5rem 1.5rem 4.5rem 1.5rem;
+        }
+        #canvas-stage canvas {
+            display: block;
+            max-width: 100%;
+            max-height: 100%;
+            width: auto !important;
+            height: auto !important;
+            aspect-ratio: 1 / 1;
+            box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.12);
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body class="h-screen w-screen flex flex-col md:flex-row relative overflow-hidden bg-zinc-950">
+
+    <!-- Main 1024x1024 Viewport Area -->
+    <main class="flex-1 h-full w-full relative overflow-hidden flex items-center justify-center bg-[radial-gradient(#27272a_1px,transparent_1px)] [background-size:20px_20px]">
+        
+        <!-- 1024x1024 Canvas Mount Point -->
+        <div id="canvas-stage"></div>
+
+        <!-- Top-Left Floating Status & Telemetry HUD -->
+        <div class="absolute top-4 left-4 z-10 flex flex-wrap items-center gap-2 pointer-events-none">
+            <div class="glass-panel px-3.5 py-2 rounded-xl flex items-center gap-3 shadow-lg pointer-events-auto">
+                <div class="w-2.5 h-2.5 rounded-full bg-zinc-100"></div>
+                <div>
+                    <h1 class="text-xs font-bold tracking-wider uppercase text-zinc-100 flex items-center gap-1.5">
+                        PARALLEL HATCH <span class="text-zinc-400 font-mono">[P]</span>
+                    </h1>
+                    <p class="text-[10px] text-zinc-400 font-mono">1024 × 1024 PX // MONOCHROME</p>
+                </div>
+            </div>
+
+            <div class="glass-panel px-3 py-2 rounded-xl flex items-center gap-3.5 text-[11px] font-mono text-zinc-400 shadow-lg pointer-events-auto">
+                <div>RES: <span class="text-zinc-100 font-semibold">1024²</span></div>
+                <div class="h-3 w-[1px] bg-zinc-700"></div>
+                <div>SEED: <span id="hud-seed" class="text-zinc-100 font-semibold">#1024</span></div>
+                <div class="h-3 w-[1px] bg-zinc-700 hidden sm:block"></div>
+                <div class="hidden sm:block">LINES: <span id="hud-elements" class="text-zinc-200">520</span></div>
+            </div>
+        </div>
+
+        <!-- Bottom-Left Quick Monochrome Preset Bar -->
+        <div class="absolute bottom-4 left-4 z-10 flex items-center gap-2 flex-wrap max-w-[calc(100vw-2rem)] md:max-w-[62vw]">
+            <div class="glass-panel p-1.5 rounded-xl flex items-center gap-1 shadow-xl overflow-x-auto">
+                <span class="text-[10px] font-mono uppercase tracking-wider text-zinc-500 px-2.5 py-1">Monochrome Presets</span>
+                <button onclick="applyPreset('chalk')" class="px-2.5 py-1.5 rounded-lg text-xs font-medium text-zinc-300 hover:text-white hover:bg-white/10 transition flex items-center gap-1.5 whitespace-nowrap">
+                    <span class="w-2.5 h-2.5 rounded-full bg-zinc-900 border border-zinc-300"></span> White on Black
+                </button>
+                <button onclick="applyPreset('engraving')" class="px-2.5 py-1.5 rounded-lg text-xs font-medium text-zinc-300 hover:text-white hover:bg-white/10 transition flex items-center gap-1.5 whitespace-nowrap">
+                    <span class="w-2.5 h-2.5 rounded-full bg-white border border-zinc-600"></span> Fine Ink on White
+                </button>
+                <button onclick="applyPreset('graphite')" class="px-2.5 py-1.5 rounded-lg text-xs font-medium text-zinc-300 hover:text-white hover:bg-white/10 transition flex items-center gap-1.5 whitespace-nowrap">
+                    <span class="w-2.5 h-2.5 rounded-full bg-zinc-400"></span> Graphite Sketch
+                </button>
+                <button onclick="applyPreset('charcoal')" class="px-2.5 py-1.5 rounded-lg text-xs font-medium text-zinc-300 hover:text-white hover:bg-white/10 transition flex items-center gap-1.5 whitespace-nowrap">
+                    <span class="w-2.5 h-2.5 rounded-full bg-zinc-700 border border-zinc-400"></span> Dense Crosshatch
+                </button>
+            </div>
+        </div>
+
+        <!-- Mobile Sidebar Toggle Button -->
+        <button id="mobile-toggle-btn" onclick="toggleSidebar()" class="md:hidden absolute top-4 right-4 z-30 glass-panel p-2.5 rounded-xl text-zinc-200 hover:text-white shadow-lg">
+            <i data-lucide="sliders-horizontal" class="w-5 h-5"></i>
+        </button>
+
+        <!-- Toast Notification for Export / Actions -->
+        <div id="toast-msg" class="absolute top-16 left-1/2 -translate-x-1/2 z-40 glass-panel px-4 py-2 rounded-full text-xs font-medium text-zinc-100 border-white/20 shadow-xl opacity-0 pointer-events-none transition-all duration-300 transform -translate-y-2 flex items-center gap-2">
+            <i data-lucide="check-circle-2" class="w-4 h-4 text-zinc-200"></i>
+            <span id="toast-text">1024x1024 PNG exported</span>
+        </div>
+    </main>
+
+    <!-- Right Control Sidebar -->
+    <aside id="control-sidebar" class="w-full md:w-[370px] lg:w-[390px] h-[65vh] md:h-full glass-panel md:border-l border-t md:border-t-0 border-white/10 z-20 flex flex-col transition-transform duration-300 fixed md:static bottom-0 left-0 translate-y-0">
+        
+        <!-- Sidebar Header -->
+        <div class="px-5 py-4 border-b border-white/10 flex items-center justify-between shrink-0">
+            <div class="flex items-center gap-2.5">
+                <i data-lucide="sliders" class="w-4 h-4 text-zinc-200"></i>
+                <h2 class="text-sm font-semibold tracking-wide text-zinc-100">HATCH PARAMETERS</h2>
+            </div>
+            <div class="flex items-center gap-1.5">
+                <button onclick="togglePause()" id="btn-pause" title="Pause / Resume Animation (Space)" class="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white transition">
+                    <i data-lucide="pause" class="w-4 h-4" id="icon-pause"></i>
+                </button>
+                <button onclick="triggerNewSeed()" title="Generate New Random Seed" class="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white transition">
+                    <i data-lucide="dice-5" class="w-4 h-4"></i>
+                </button>
+                <button onclick="toggleSidebar()" class="md:hidden p-1.5 rounded-lg bg-white/5 text-zinc-400">
+                    <i data-lucide="chevron-down" class="w-4 h-4"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- Scrollable Parameter Controls -->
+        <div class="flex-1 overflow-y-auto custom-scroll p-5 space-y-6">
+
+            <!-- 1. Monochrome Luminance (White to Black) -->
+            <div class="space-y-4">
+                <div class="flex items-center justify-between">
+                    <label class="text-[11px] font-mono uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+                        <i data-lucide="contrast" class="w-3.5 h-3.5 text-zinc-200"></i>
+                        1. Grayscale Tone (白〜黒の階調)
+                    </label>
+                    <button onclick="invertMonochrome()" class="text-[11px] font-mono px-2.5 py-1 rounded-md bg-white/10 hover:bg-white/20 text-zinc-200 transition flex items-center gap-1">
+                        <i data-lucide="arrow-left-right" class="w-3 h-3"></i> Invert
+                    </button>
+                </div>
+
+                <!-- Background Grayscale -->
+                <div class="space-y-1.5">
+                    <div class="flex justify-between text-xs">
+                        <span class="text-zinc-300">Background Gray (背景の明度)</span>
+                        <span id="val-bgGray" class="font-mono text-zinc-200">12</span>
+                    </div>
+                    <input type="range" id="ctrl-bgGray" min="0" max="255" step="1" value="12">
+                </div>
+
+                <!-- Stroke Min Grayscale -->
+                <div class="space-y-1.5">
+                    <div class="flex justify-between text-xs">
+                        <span class="text-zinc-300">Stroke Gray Min (線の最小明度)</span>
+                        <span id="val-strokeMin" class="font-mono text-zinc-200">140</span>
+                    </div>
+                    <input type="range" id="ctrl-strokeMin" min="0" max="255" step="1" value="140">
+                </div>
+
+                <!-- Stroke Max Grayscale -->
+                <div class="space-y-1.5">
+                    <div class="flex justify-between text-xs">
+                        <span class="text-zinc-300">Stroke Gray Max (線の最大明度)</span>
+                        <span id="val-strokeMax" class="font-mono text-zinc-200">255</span>
+                    </div>
+                    <input type="range" id="ctrl-strokeMax" min="0" max="255" step="1" value="255">
+                </div>
+            </div>
+
+            <hr class="border-white/10">
+
+            <!-- 2. Hatch Line & Density Dynamics -->
+            <div class="space-y-4">
+                <label class="text-[11px] font-mono uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+                    <i data-lucide="pen-tool" class="w-3.5 h-3.5 text-zinc-200"></i>
+                    2. Parallel Hatch & Stroke
+                </label>
+
+                <!-- Density / Line Count -->
+                <div class="space-y-1.5">
+                    <div class="flex justify-between text-xs">
+                        <span class="text-zinc-300">Line Density (線の本数・密度)</span>
+                        <span id="val-density" class="font-mono text-zinc-200">520</span>
+                    </div>
+                    <input type="range" id="ctrl-density" min="40" max="1500" step="10" value="520">
+                </div>
+
+                <!-- Stroke Weight -->
+                <div class="space-y-1.5">
+                    <div class="flex justify-between text-xs">
+                        <span class="text-zinc-300">Stroke Weight (線の太さ)</span>
+                        <span id="val-weight" class="font-mono text-zinc-200">1.2 px</span>
+                    </div>
+                    <input type="range" id="ctrl-weight" min="0.2" max="5.0" step="0.1" value="1.2">
+                </div>
+
+                <!-- Line Alpha / Opacity -->
+                <div class="space-y-1.5">
+                    <div class="flex justify-between text-xs">
+                        <span class="text-zinc-300">Stroke Opacity (透明度)</span>
+                        <span id="val-alpha" class="font-mono text-zinc-200">65%</span>
+                    </div>
+                    <input type="range" id="ctrl-alpha" min="5" max="100" step="1" value="65">
+                </div>
+
+                <!-- Base Hatch Angle (Span parameter mapped to angle) -->
+                <div class="space-y-1.5">
+                    <div class="flex justify-between text-xs">
+                        <span class="text-zinc-300">Hatch Angle / Span (基本角度)</span>
+                        <span id="val-span" class="font-mono text-zinc-200">65</span>
+                    </div>
+                    <input type="range" id="ctrl-span" min="15" max="160" step="1" value="65">
+                </div>
+
+                <!-- Hatch Length Multiplier -->
+                <div class="space-y-1.5">
+                    <div class="flex justify-between text-xs">
+                        <span class="text-zinc-300">Hatch Line Length (線の長さ倍率)</span>
+                        <span id="val-lengthMult" class="font-mono text-zinc-200">1.00x</span>
+                    </div>
+                    <input type="range" id="ctrl-lengthMult" min="0.3" max="2.5" step="0.05" value="1.00">
+                </div>
+
+                <!-- Cross-Hatch Toggle -->
+                <div class="flex items-center justify-between pt-1">
+                    <span class="text-xs text-zinc-300">Cross-Hatch Layer (交差ハッチング)</span>
+                    <input type="checkbox" id="ctrl-crossHatch" checked class="w-4 h-4 rounded bg-zinc-800 border-zinc-600 text-zinc-200 focus:ring-0 cursor-pointer">
+                </div>
+            </div>
+
+            <hr class="border-white/10">
+
+            <!-- 3. Noise & Field Turbulence -->
+            <div class="space-y-4">
+                <label class="text-[11px] font-mono uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+                    <i data-lucide="waves" class="w-3.5 h-3.5 text-zinc-200"></i>
+                    3. Noise & Motion Field
+                </label>
+
+                <!-- Noise Scale -->
+                <div class="space-y-1.5">
+                    <div class="flex justify-between text-xs">
+                        <span class="text-zinc-300">Noise Frequency (うねりの細かさ)</span>
+                        <span id="val-noiseScale" class="font-mono text-zinc-200">0.008</span>
+                    </div>
+                    <input type="range" id="ctrl-noiseScale" min="0.001" max="0.030" step="0.001" value="0.008">
+                </div>
+
+                <!-- Turbulence / Amplitude -->
+                <div class="space-y-1.5">
+                    <div class="flex justify-between text-xs">
+                        <span class="text-zinc-300">Turbulence (角度の揺らぎ強度)</span>
+                        <span id="val-turbulence" class="font-mono text-zinc-200">42</span>
+                    </div>
+                    <input type="range" id="ctrl-turbulence" min="0" max="150" step="1" value="42">
+                </div>
+
+                <!-- Animation Speed -->
+                <div class="space-y-1.5">
+                    <div class="flex justify-between text-xs">
+                        <span class="text-zinc-300">Time Speed (アニメーション速度)</span>
+                        <span id="val-speed" class="font-mono text-zinc-200">0.5x</span>
+                    </div>
+                    <input type="range" id="ctrl-speed" min="0" max="4.0" step="0.1" value="0.5">
+                </div>
+            </div>
+
+            <hr class="border-white/10">
+
+            <!-- 4. Typography "P" Anatomy -->
+            <div class="space-y-4">
+                <div class="flex items-center justify-between">
+                    <label class="text-[11px] font-mono uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+                        <i data-lucide="type" class="w-3.5 h-3.5 text-zinc-200"></i>
+                        4. Letter "P" Anatomy
+                    </label>
+                    <label class="flex items-center gap-1.5 text-[11px] text-zinc-400 cursor-pointer">
+                        <input type="checkbox" id="ctrl-skeleton" class="rounded bg-zinc-800 border-zinc-700 text-zinc-200 focus:ring-0">
+                        <span>Guide Skeleton</span>
+                    </label>
+                </div>
+
+                <!-- P Weight / Thickness -->
+                <div class="space-y-1.5">
+                    <div class="flex justify-between text-xs">
+                        <span class="text-zinc-300">Stem & Bowl Thickness (字の太さ)</span>
+                        <span id="val-pThickness" class="font-mono text-zinc-200">58 px</span>
+                    </div>
+                    <input type="range" id="ctrl-pThickness" min="20" max="130" step="2" value="58">
+                </div>
+
+                <!-- P Bowl Radius Ratio -->
+                <div class="space-y-1.5">
+                    <div class="flex justify-between text-xs">
+                        <span class="text-zinc-300">Bowl Expansion (ループの大きさ)</span>
+                        <span id="val-pBowl" class="font-mono text-zinc-200">1.05</span>
+                    </div>
+                    <input type="range" id="ctrl-pBowl" min="0.6" max="1.6" step="0.05" value="1.05">
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Sidebar Footer Action Buttons -->
+        <div class="p-4 border-t border-white/10 bg-black/50 space-y-2 shrink-0">
+            <div class="grid grid-cols-2 gap-2">
+                <button onclick="randomizeParameters()" class="px-3 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-zinc-200 font-medium text-xs flex items-center justify-center gap-1.5 transition active:scale-95">
+                    <i data-lucide="shuffle" class="w-3.5 h-3.5 text-zinc-300"></i>
+                    Randomize
+                </button>
+                <button onclick="exportArtwork()" class="px-3 py-2.5 rounded-xl bg-zinc-100 hover:bg-white text-zinc-950 font-semibold text-xs flex items-center justify-center gap-1.5 shadow-lg transition active:scale-95">
+                    <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                    Save 1024px PNG
+                </button>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Application & p5.js Generative Logic -->
+    <script>
+        // Initialize Lucide icons
+        lucide.createIcons();
+
+        // Fixed 1024x1024 Resolution Constant
+        const CANVAS_SIZE = 1024;
+
+        // ==========================================
+        // STUDIO STATE & CONFIGURATION
+        // ==========================================
+        const state = {
+            density: 520,          // Number of primary hatch lines
+            strokeWeight: 1.2,
+            alpha: 65,             // 5 - 100 (%)
+            span: 65,              // Controls base hatch angle (-HALF_PI to HALF_PI)
+            lengthMult: 1.0,       // Multiplier for hatch segment length
+            crossHatch: true,      // Secondary cross-hatch layer
+            noiseScale: 0.008,
+            turbulence: 42,
+            speed: 0.5,
+            paused: false,
+            pThickness: 58,        // Half-thickness radius of the 'P' stroke
+            pBowlRatio: 1.05,      // Scale multiplier of the P loop
+            showSkeleton: false,
+            // Strictly Monochrome Grayscale values (0 = pure black, 255 = pure white)
+            bgGray: 12,
+            strokeMin: 140,
+            strokeMax: 255,
+            seed: 1024,
+            time: 0
+        };
+
+        // Cached points & spine data for the letter "P"
+        let pSpine = [];
+        let pNodes = [];
+        const pScale = CANVAS_SIZE / 780; // Scaled cleanly for 1024x1024px
+
+        // ==========================================
+        // P5.JS SKETCH IMPLEMENTATION (1024x1024)
+        // ==========================================
+        function setup() {
+            const cnv = createCanvas(CANVAS_SIZE, CANVAS_SIZE);
+            cnv.parent('canvas-stage');
+            
+            // Strictly enforce pixelDensity(1) so exported PNG is 1024x1024px
+            pixelDensity(1);
+            noiseSeed(state.seed);
+            randomSeed(state.seed);
+
+            rebuildPGeometry();
+            updateHUD();
+        }
+
+        // ==========================================
+        // GEOMETRY ENGINE: ANATOMY OF LETTER "P"
+        // ==========================================
+        /**
+         * Builds the mathematical centerline spine of the letter 'P'
+         * and populates generative seed nodes inside the P volume.
+         */
+        function rebuildPGeometry() {
+            pSpine = [];
+
+            const cx = CANVAS_SIZE * 0.5;
+            const cy = CANVAS_SIZE * 0.5;
+
+            // Key coordinates of 'P' in 1024x1024 space
+            const stemX = cx - 95 * pScale;
+            const topY = cy - 230 * pScale;
+            const bottomY = cy + 230 * pScale;
+            const midY = cy + 15 * pScale;
+            const bowlCenterY = (topY + midY) * 0.5;
+            const bowlRadiusY = (midY - topY) * 0.5;
+            const bowlRadiusX = 135 * pScale * state.pBowlRatio;
+            const bowlFlatSpan = 45 * pScale * state.pBowlRatio;
+
+            // 1. Vertical Stem (Bottom to Top)
+            const stemSteps = 75;
+            for (let i = 0; i <= stemSteps; i++) {
+                const t = i / stemSteps;
+                const y = lerp(bottomY, topY, t);
+                pSpine.push({
+                    x: stemX,
+                    y: y,
+                    tx: 0,
+                    ty: -1,
+                    part: 'stem',
+                    progress: t * 0.45
+                });
+            }
+
+            // 2. Top Horizontal Bridge of Bowl
+            const bridgeSteps = 20;
+            for (let i = 1; i <= bridgeSteps; i++) {
+                const t = i / bridgeSteps;
+                const x = lerp(stemX, stemX + bowlFlatSpan, t);
+                pSpine.push({
+                    x: x,
+                    y: topY,
+                    tx: 1,
+                    ty: 0,
+                    part: 'bowl-top',
+                    progress: 0.45 + t * 0.1
+                });
+            }
+
+            // 3. Curved Right Loop (Arc from -PI/2 to +PI/2)
+            const arcSteps = 70;
+            const arcOriginX = stemX + bowlFlatSpan;
+            for (let i = 1; i <= arcSteps; i++) {
+                const t = i / arcSteps;
+                const angle = lerp(-HALF_PI, HALF_PI, t);
+                const x = arcOriginX + cos(angle) * bowlRadiusX;
+                const y = bowlCenterY + sin(angle) * bowlRadiusY;
+                const dx = -sin(angle) * bowlRadiusX;
+                const dy = cos(angle) * bowlRadiusY;
+                const mag = Math.hypot(dx, dy) || 1;
+                pSpine.push({
+                    x: x,
+                    y: y,
+                    tx: dx / mag,
+                    ty: dy / mag,
+                    part: 'bowl-arc',
+                    progress: 0.55 + t * 0.35
+                });
+            }
+
+            // 4. Bottom Horizontal Return of Bowl (Back to Stem)
+            for (let i = 1; i <= bridgeSteps; i++) {
+                const t = i / bridgeSteps;
+                const x = lerp(arcOriginX, stemX, t);
+                pSpine.push({
+                    x: x,
+                    y: midY,
+                    tx: -1,
+                    ty: 0,
+                    part: 'bowl-bottom',
+                    progress: 0.9 + t * 0.1
+                });
+            }
+
+            generatePNodes();
+        }
+
+        /**
+         * Populates deterministic seed nodes along and within the "P" body
+         */
+        function generatePNodes() {
+            randomSeed(state.seed);
+            noiseSeed(state.seed);
+            pNodes = [];
+
+            const maxNodes = 1500;
+            const thickness = state.pThickness * pScale;
+
+            for (let i = 0; i < maxNodes; i++) {
+                const idx = floor(random(pSpine.length));
+                const sp = pSpine[idx];
+                // Normal vector to spine tangent
+                const nx = -sp.ty;
+                const ny = sp.tx;
+
+                // Gaussian-like spread across the stroke width
+                const offsetNorm = (random(-1, 1) + random(-1, 1)) * 0.5;
+                const offsetDist = offsetNorm * thickness;
+
+                // Slight jitter along tangent
+                const jitterT = random(-8, 8) * pScale;
+
+                pNodes.push({
+                    baseX: sp.x + nx * offsetDist + sp.tx * jitterT,
+                    baseY: sp.y + ny * offsetDist + sp.ty * jitterT,
+                    tx: sp.tx,
+                    ty: sp.ty,
+                    nx: nx,
+                    ny: ny,
+                    offsetRatio: offsetNorm,
+                    progress: sp.progress,
+                    spineIndex: idx,
+                    toneFactor: random(0, 1)
+                });
+            }
+        }
+
+        // ==========================================
+        // MONOCHROME GRAYSCALE SHADING HELPER
+        // ==========================================
+        /**
+         * Returns a strictly grayscale color between black (0) and white (255)
+         */
+        function getMonochromeStroke(index, progress, noiseVal, alphaMultiplier = 1.0) {
+            const baseAlpha = (state.alpha / 100) * 255 * alphaMultiplier;
+            // Blend between strokeMin and strokeMax using noise and index variation
+            const t = constrain((noiseVal * 0.7 + ((index % 17) / 16) * 0.3), 0, 1);
+            const grayVal = Math.round(lerp(state.strokeMin, state.strokeMax, t));
+            return color(grayVal, grayVal, grayVal, baseAlpha);
+        }
+
+        // ==========================================
+        // MAIN DRAW LOOP
+        // ==========================================
+        function draw() {
+            blendMode(BLEND);
+            // Strictly monochrome background (R=G=B=bgGray)
+            background(state.bgGray);
+
+            if (!state.paused) {
+                state.time += 0.012 * state.speed;
+            }
+
+            noFill();
+            strokeWeight(state.strokeWeight);
+
+            // Execute Parallel Hatching
+            drawParallelHatching();
+
+            // Optional Structural Guide Skeleton (also strictly monochrome)
+            if (state.showSkeleton) {
+                drawGuideSkeleton();
+            }
+        }
+
+        // ==========================================
+        // PARALLEL HATCHING / HALFTONE LINES
+        // ==========================================
+        function drawParallelHatching() {
+            const count = state.density;
+            const thickness = state.pThickness * pScale;
+            const nScale = state.noiseScale;
+            const turbAngle = (state.turbulence / 100) * PI;
+            // Base angle controlled by span slider
+            const baseAngle = map(state.span, 15, 160, -HALF_PI, HALF_PI);
+
+            for (let i = 0; i < count; i++) {
+                const spIdx = (i * 7) % pSpine.length;
+                const sp = pSpine[spIdx];
+                const node = pNodes[i % pNodes.length];
+
+                const cx = sp.x + node.nx * (node.offsetRatio * thickness * 0.85);
+                const cy = sp.y + node.ny * (node.offsetRatio * thickness * 0.85);
+
+                // Local noise modulation
+                const n = noise(cx * nScale, cy * nScale, state.time);
+                const hatchAngle = baseAngle + (n - 0.5) * turbAngle;
+
+                // Primary hatch line length proportional to thickness & proximity to center
+                const edgeFactor = Math.sqrt(Math.max(0.1, 1 - node.offsetRatio * node.offsetRatio));
+                const halfLen = thickness * edgeFactor * (0.65 + n * 0.7) * state.lengthMult;
+
+                const dx = cos(hatchAngle) * halfLen;
+                const dy = sin(hatchAngle) * halfLen;
+
+                stroke(getMonochromeStroke(i, sp.progress, n, 1.0));
+                line(cx - dx, cy - dy, cx + dx, cy + dy);
+
+                // Secondary cross-hatch layer for rich engraving texture
+                if (state.crossHatch && i % 3 === 0) {
+                    const crossAngle = hatchAngle + HALF_PI * 0.75;
+                    const cdx = cos(crossAngle) * halfLen * 0.6;
+                    const cdy = sin(crossAngle) * halfLen * 0.6;
+                    stroke(getMonochromeStroke(i + 5, sp.progress, 1 - n, 0.55));
+                    line(cx - cdx, cy - cdy, cx + cdx, cy + cdy);
+                }
+            }
+        }
+
+        // ==========================================
+        // OVERLAY: MONOCHROME SKELETON GUIDE
+        // ==========================================
+        function drawGuideSkeleton() {
+            const guideGray = state.bgGray < 128 ? 255 : 0;
+            stroke(guideGray, guideGray, guideGray, 160);
+            strokeWeight(1.5);
+            beginShape();
+            for (let i = 0; i < pSpine.length; i++) {
+                vertex(pSpine[i].x, pSpine[i].y);
+            }
+            endShape();
+
+            // Normal ticks along spine
+            stroke(guideGray, guideGray, guideGray, 80);
+            strokeWeight(1);
+            const r = state.pThickness * pScale;
+            for (let i = 0; i < pSpine.length; i += 8) {
+                const sp = pSpine[i];
+                const nx = -sp.ty * r;
+                const ny = sp.tx * r;
+                line(sp.x - nx, sp.y - ny, sp.x + nx, sp.y + ny);
+            }
+        }
+
+        // ==========================================
+        // UI EVENT BINDINGS & CONTROLLERS
+        // ==========================================
+        function bindSlider(id, stateKey, valId, formatter = (v) => v, rebuildGeo = false) {
+            const el = document.getElementById(id);
+            const valEl = document.getElementById(valId);
+
+            el.addEventListener('input', (e) => {
+                const num = parseFloat(e.target.value);
+                state[stateKey] = num;
+                if (valEl) valEl.textContent = formatter(num);
+                if (rebuildGeo) rebuildPGeometry();
+                updateHUD();
+            });
+        }
+
+        bindSlider('ctrl-bgGray', 'bgGray', 'val-bgGray', v => Math.round(v));
+        bindSlider('ctrl-strokeMin', 'strokeMin', 'val-strokeMin', v => Math.round(v));
+        bindSlider('ctrl-strokeMax', 'strokeMax', 'val-strokeMax', v => Math.round(v));
+        bindSlider('ctrl-density', 'density', 'val-density', v => Math.round(v));
+        bindSlider('ctrl-weight', 'strokeWeight', 'val-weight', v => v.toFixed(1) + ' px');
+        bindSlider('ctrl-alpha', 'alpha', 'val-alpha', v => Math.round(v) + '%');
+        bindSlider('ctrl-span', 'span', 'val-span', v => Math.round(v));
+        bindSlider('ctrl-lengthMult', 'lengthMult', 'val-lengthMult', v => v.toFixed(2) + 'x');
+        bindSlider('ctrl-noiseScale', 'noiseScale', 'val-noiseScale', v => v.toFixed(3));
+        bindSlider('ctrl-turbulence', 'turbulence', 'val-turbulence', v => Math.round(v));
+        bindSlider('ctrl-speed', 'speed', 'val-speed', v => v.toFixed(1) + 'x');
+        bindSlider('ctrl-pThickness', 'pThickness', 'val-pThickness', v => Math.round(v) + ' px', true);
+        bindSlider('ctrl-pBowl', 'pBowlRatio', 'val-pBowl', v => v.toFixed(2), true);
+
+        // Cross-hatch checkbox
+        document.getElementById('ctrl-crossHatch').addEventListener('change', (e) => {
+            state.crossHatch = e.target.checked;
+        });
+
+        // Skeleton checkbox
+        document.getElementById('ctrl-skeleton').addEventListener('change', (e) => {
+            state.showSkeleton = e.target.checked;
+        });
+
+        // Invert Background & Stroke Grayscale
+        function invertMonochrome() {
+            state.bgGray = 255 - state.bgGray;
+            const oldMin = state.strokeMin;
+            const oldMax = state.strokeMax;
+            state.strokeMin = 255 - oldMax;
+            state.strokeMax = 255 - oldMin;
+            syncUIFromState();
+            showToast('Monochrome Tones Inverted');
+        }
+
+        // Pause / Resume
+        function togglePause() {
+            state.paused = !state.paused;
+            const btn = document.getElementById('btn-pause');
+            btn.innerHTML = state.paused
+                ? '<i data-lucide="play" class="w-4 h-4 text-zinc-100"></i>'
+                : '<i data-lucide="pause" class="w-4 h-4"></i>';
+            lucide.createIcons();
+        }
+
+        // New Random Seed
+        function triggerNewSeed() {
+            state.seed = Math.floor(Math.random() * 9000) + 1000;
+            generatePNodes();
+            updateHUD();
+            showToast(`New Seed Generated: #${state.seed}`);
+        }
+
+        // Synchronize UI Controls with State object
+        function syncUIFromState() {
+            document.getElementById('ctrl-bgGray').value = state.bgGray;
+            document.getElementById('val-bgGray').textContent = Math.round(state.bgGray);
+
+            document.getElementById('ctrl-strokeMin').value = state.strokeMin;
+            document.getElementById('val-strokeMin').textContent = Math.round(state.strokeMin);
+
+            document.getElementById('ctrl-strokeMax').value = state.strokeMax;
+            document.getElementById('val-strokeMax').textContent = Math.round(state.strokeMax);
+
+            document.getElementById('ctrl-density').value = state.density;
+            document.getElementById('val-density').textContent = state.density;
+
+            document.getElementById('ctrl-weight').value = state.strokeWeight;
+            document.getElementById('val-weight').textContent = state.strokeWeight.toFixed(1) + ' px';
+
+            document.getElementById('ctrl-alpha').value = state.alpha;
+            document.getElementById('val-alpha').textContent = state.alpha + '%';
+
+            document.getElementById('ctrl-span').value = state.span;
+            document.getElementById('val-span').textContent = state.span;
+
+            document.getElementById('ctrl-lengthMult').value = state.lengthMult;
+            document.getElementById('val-lengthMult').textContent = state.lengthMult.toFixed(2) + 'x';
+
+            document.getElementById('ctrl-crossHatch').checked = state.crossHatch;
+
+            document.getElementById('ctrl-noiseScale').value = state.noiseScale;
+            document.getElementById('val-noiseScale').textContent = state.noiseScale.toFixed(3);
+
+            document.getElementById('ctrl-turbulence').value = state.turbulence;
+            document.getElementById('val-turbulence').textContent = state.turbulence;
+
+            document.getElementById('ctrl-speed').value = state.speed;
+            document.getElementById('val-speed').textContent = state.speed.toFixed(1) + 'x';
+
+            document.getElementById('ctrl-pThickness').value = state.pThickness;
+            document.getElementById('val-pThickness').textContent = state.pThickness + ' px';
+
+            document.getElementById('ctrl-pBowl').value = state.pBowlRatio;
+            document.getElementById('val-pBowl').textContent = state.pBowlRatio.toFixed(2);
+
+            updateHUD();
+        }
+
+        // Monochrome Presets
+        function applyPreset(name) {
+            if (name === 'chalk') {
+                Object.assign(state, {
+                    bgGray: 10,
+                    strokeMin: 150,
+                    strokeMax: 255,
+                    density: 520,
+                    strokeWeight: 1.2,
+                    alpha: 65,
+                    span: 65,
+                    lengthMult: 1.0,
+                    crossHatch: true,
+                    noiseScale: 0.008,
+                    turbulence: 42,
+                    pThickness: 58,
+                    pBowlRatio: 1.05
+                });
+            } else if (name === 'engraving') {
+                Object.assign(state, {
+                    bgGray: 250,
+                    strokeMin: 0,
+                    strokeMax: 75,
+                    density: 720,
+                    strokeWeight: 0.8,
+                    alpha: 75,
+                    span: 50,
+                    lengthMult: 0.95,
+                    crossHatch: true,
+                    noiseScale: 0.006,
+                    turbulence: 28,
+                    pThickness: 56,
+                    pBowlRatio: 1.0
+                });
+            } else if (name === 'graphite') {
+                Object.assign(state, {
+                    bgGray: 228,
+                    strokeMin: 25,
+                    strokeMax: 120,
+                    density: 600,
+                    strokeWeight: 1.1,
+                    alpha: 55,
+                    span: 115,
+                    lengthMult: 1.15,
+                    crossHatch: false,
+                    noiseScale: 0.010,
+                    turbulence: 55,
+                    pThickness: 62,
+                    pBowlRatio: 1.05
+                });
+            } else if (name === 'charcoal') {
+                Object.assign(state, {
+                    bgGray: 0,
+                    strokeMin: 90,
+                    strokeMax: 255,
+                    density: 980,
+                    strokeWeight: 1.4,
+                    alpha: 45,
+                    span: 40,
+                    lengthMult: 1.25,
+                    crossHatch: true,
+                    noiseScale: 0.012,
+                    turbulence: 72,
+                    pThickness: 68,
+                    pBowlRatio: 1.10
+                });
+            }
+
+            rebuildPGeometry();
+            syncUIFromState();
+            showToast(`Preset loaded: ${name.toUpperCase()}`);
+        }
+
+        // Randomize Parameters within Monochrome Parallel Hatch constraints
+        function randomizeParameters() {
+            state.seed = Math.floor(Math.random() * 9000) + 1000;
+            const isDark = Math.random() > 0.45;
+            if (isDark) {
+                state.bgGray = Math.floor(random(0, 35));
+                state.strokeMin = Math.floor(random(100, 180));
+                state.strokeMax = Math.floor(random(210, 255));
+            } else {
+                state.bgGray = Math.floor(random(225, 255));
+                state.strokeMin = Math.floor(random(0, 40));
+                state.strokeMax = Math.floor(random(60, 140));
+            }
+
+            state.density = Math.floor(random(280, 1100) / 10) * 10;
+            state.strokeWeight = Math.round(random(0.6, 2.2) * 10) / 10;
+            state.alpha = Math.floor(random(35, 85));
+            state.span = Math.floor(random(20, 155));
+            state.lengthMult = Math.round(random(0.7, 1.5) * 20) / 20;
+            state.crossHatch = Math.random() > 0.25;
+            state.noiseScale = Math.round(random(0.003, 0.018) * 1000) / 1000;
+            state.turbulence = Math.floor(random(15, 95));
+            state.pThickness = Math.floor(random(40, 84) / 2) * 2;
+            state.pBowlRatio = Math.round(random(0.85, 1.3) * 20) / 20;
+
+            rebuildPGeometry();
+            syncUIFromState();
+            showToast('Randomized Monochrome Parameters');
+        }
+
+        // Update Top-Left HUD Telemetry
+        function updateHUD() {
+            document.getElementById('hud-seed').textContent = `#${state.seed}`;
+            document.getElementById('hud-elements').textContent = state.density;
+        }
+
+        // Export exact 1024x1024px PNG Artwork
+        function exportArtwork() {
+            const filename = `parallel-hatch-P-1024x1024-seed${state.seed}`;
+            saveCanvas(filename, 'png');
+            showToast(`Saved 1024×1024 PNG: "${filename}.png"`);
+        }
+
+        // Toast Helper
+        let toastTimer = null;
+        function showToast(msg) {
+            const toast = document.getElementById('toast-msg');
+            const text = document.getElementById('toast-text');
+            text.textContent = msg;
+            toast.classList.remove('opacity-0', '-translate-y-2');
+            toast.classList.add('opacity-100', 'translate-y-0');
+
+            if (toastTimer) clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => {
+                toast.classList.remove('opacity-100', 'translate-y-0');
+                toast.classList.add('opacity-0', '-translate-y-2');
+            }, 2200);
+        }
+
+        // Responsive Mobile Sidebar Toggle
+        let sidebarOpen = true;
+        function toggleSidebar() {
+            const sb = document.getElementById('control-sidebar');
+            sidebarOpen = !sidebarOpen;
+            if (sidebarOpen) {
+                sb.classList.remove('translate-y-full');
+                sb.classList.add('translate-y-0');
+            } else {
+                sb.classList.remove('translate-y-0');
+                sb.classList.add('translate-y-full');
+            }
+        }
+
+        // Keyboard Shortcuts
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' && e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') {
+                e.preventDefault();
+                togglePause();
+            } else if (e.key === 'r' || e.key === 'R') {
+                randomizeParameters();
+            } else if (e.key === 's' || e.key === 'S') {
+                exportArtwork();
+            }
+        });
+    </script>
+</body>
+</html>

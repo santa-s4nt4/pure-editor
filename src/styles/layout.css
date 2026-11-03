@@ -16,6 +16,9 @@ button:disabled { cursor: wait; opacity: 0.5; }
 .home-heading, .home-search, .note-grid, .home-empty { max-inline-size: var(--home-measure); margin-inline: auto; }
 .home-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 2rem; }
 .home-heading h1 { font-size: 1.7rem; margin: 0; font-weight: 400; letter-spacing: 0; }
+.visually-hidden { position: absolute; inline-size: 0.0625rem; block-size: 0.0625rem; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.home-wordmark { display: block; line-height: 0; }
+.home-wordmark canvas { display: block; inline-size: var(--wordmark-width); max-inline-size: 100%; block-size: auto; aspect-ratio: 2600 / 1024; }
 .home-heading nav { display: flex; gap: 1.5rem; font-size: 0.85em; }
 .home-heading button { padding: 0; }
 .home-search { display: flex; align-items: baseline; gap: 1rem; margin-block: 2.5rem 3.5rem; font-size: 0.9em; }
@@ -32,6 +35,16 @@ button:disabled { cursor: wait; opacity: 0.5; }
 .tags-more { flex: 0 0 auto; }
 .home-empty { color: var(--text-muted); }
 .native-title-region { position: fixed; inset-block-start: 0; inset-inline: 5rem 0; block-size: 2rem; z-index: 1; }
+/* 左の余白だけを入口にし、本文を動かさずに目次を重ねます。 */
+.article-outline { position: fixed; inset-inline-start: 0; inset-block-start: var(--page-top); inset-block-end: 2rem; inline-size: var(--toc-trigger-width); z-index: 3; font-size: var(--font-size-body); }
+.outline-trigger { display: block; inline-size: 100%; block-size: 100%; padding: 0; cursor: default; }
+.outline-trigger:focus-visible { outline: none; }
+.outline-panel { position: absolute; inset-block: 0; inset-inline-start: 1rem; inline-size: min(var(--outline-width), calc(100vw - 2rem)); padding: 0.5em; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; opacity: 0; visibility: hidden; pointer-events: none; transform: translateX(-0.35rem); background: color-mix(in oklch, var(--paper) 96%, transparent); transition: opacity var(--outline-fade), transform var(--outline-fade), visibility 0s var(--outline-fade); }
+.outline-panel::-webkit-scrollbar { display: none; inline-size: 0; block-size: 0; }
+.article-outline:is(:hover, :focus-within) .outline-panel { opacity: 1; visibility: visible; pointer-events: auto; transform: translateX(0); transition-delay: 0s; }
+.outline-heading { display: block; inline-size: 100%; padding-block: 0.45em; padding-inline: calc(0.3em + var(--toc-depth) * 0.8em) 0.3em; text-align: start; overflow-wrap: anywhere; font-size: 0.86em; line-height: 1.8; color: var(--text-faint); }
+.outline-heading:is(:hover, .is-current) { color: var(--text-ink); }
+@media (pointer: coarse) { .article-outline { display: none; } }
 .cm-editor {
   block-size: 100%;
   background: transparent;

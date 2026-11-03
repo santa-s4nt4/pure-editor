@@ -55,6 +55,9 @@
   /* 箇条書きの点は文字・画像・動画で同じ寸法を共用します。 */
   --bullet-size: 0.2rem;
   --checkbox-size: 0.8rem;
+  --wordmark-width: 11.5rem;
+  --outline-width: 12rem;
+  --outline-fade: 220ms;
 }
 :root[data-theme='light'] { color-scheme: light; }
 :root[data-theme='dark'] { color-scheme: dark; }
