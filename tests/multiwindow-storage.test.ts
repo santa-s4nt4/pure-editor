@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { StorageManager, parseManifest, type LocalBackend } from '../src/lib/storage';
+import { StorageManager, parseManifest, sha256, type LocalBackend } from '../src/lib/storage';
 import { PaperNotebook } from '../src/lib/paper-notebook';
+import { publicationDocument, withPublication } from '../src/lib/publication';
 
 class SharedFiles implements LocalBackend {
   constructor(readonly coordinationKey: string, readonly files: Map<string, Uint8Array>) {}
@@ -83,5 +84,46 @@ describe('複数ウィンドウの保存', () => {
     await book.refresh();
     expect(exports).toBe(1);
     expect(await book.readNote(path)).toContain('更新済み');
+  });
+
+  it('既存 Markdown を一括修正し、原本・名前・編集日時・公開設定を維持する', async () => {
+    const { a, b, files } = await windows(); const encode = (value: string) => new TextEncoder().encode(value);
+    const publication = { repository: 'test/notes', branch: 'main', visibility: 'public' as const, revision: '11111111-1111-4111-8111-111111111111', parent: null };
+    const first = await a.createNote('A'); const second = await a.createNote('B');
+    const original = withPublication('# A\n\n- item\n2025.1', publication);
+    files.set(first, encode(original)); files.set(second, encode('# B\n\n- parent\n  - child\n2024.1'));
+    await a.refresh();
+    const before = parseManifest(files.get('_sync.json')!).files[first];
+    expect(await a.migrateMarkdownLayout()).toBe(2);
+    const fixed = files.get(first)!; const document = publicationDocument(new TextDecoder().decode(fixed));
+    expect(document.body).toBe('# A\n\n- item\n\n2025.1'); expect(document.publication).toEqual(publication);
+    const entry = parseManifest(files.get('_sync.json')!).files[first];
+    expect(entry.updatedAt).toBe(before.updatedAt); expect(entry.sha256).toBe(await sha256(fixed));
+    expect([...files.entries()].some(([path, bytes]) => path.startsWith('.trash/markdown-layout-') && new TextDecoder().decode(bytes) === original)).toBe(true);
+    const backups = [...files.keys()].filter(path => path.startsWith('.trash/markdown-layout-')).length;
+    expect(await a.migrateMarkdownLayout()).toBe(0); expect(await b.migrateMarkdownLayout()).toBe(0);
+    expect([...files.keys()].filter(path => path.startsWith('.trash/markdown-layout-')).length).toBe(backups);
+    expect((await a.listNotes()).map(note => note.path).sort()).toEqual([first, second].sort());
+  });
+
+  it('空行の補完だけでは、次の保存で誤った競合コピーを作らない', async () => {
+    const { a } = await windows(); const path = await a.createNote('記事'); const original = '# 記事\n\n- item\n2025.1';
+    await a.saveNamedNote(path, original);
+    await a.saveNamedNote(path, original + '\n追記', original);
+    expect((await a.listNotes()).filter(note => note.path.includes('conflict'))).toHaveLength(0);
+    expect(await a.readNote(path)).toContain('- item\n\n2025.1\n追記');
+  });
+
+  it('一括修正の途中で保存に失敗しても元の本文と索引に戻し、原本も残す', async () => {
+    const { a, files } = await windows(); const encode = (value: string) => new TextEncoder().encode(value);
+    const first = await a.createNote('A'); const second = await a.createNote('B');
+    files.set(first, encode('# A\n\n- item\n2025')); files.set(second, encode('# B\n\n- item\n2024')); await a.refresh();
+    const before = new Map([...files].map(([path, bytes]) => [path, bytes.slice()]));
+    const write = a.backend.write.bind(a.backend); let failed = false;
+    a.backend.write = async (path, bytes) => { if (path === second && !failed) { failed = true; throw new Error('保存失敗'); } await write(path, bytes); };
+    await expect(a.migrateMarkdownLayout()).rejects.toThrow('保存失敗');
+    expect(files.get(first)).toEqual(before.get(first)); expect(files.get(second)).toEqual(before.get(second));
+    expect(parseManifest(files.get('_sync.json')!)).toEqual(parseManifest(before.get('_sync.json')!));
+    expect([...files.keys()].filter(path => path.startsWith('.trash/markdown-layout-'))).toHaveLength(2);
   });
 });

@@ -32,6 +32,12 @@ async function setup() {
 }
 
 describe('GitHub 記事公開', () => {
+  it('古い保存形式の記事でも、公開 Markdown では日付を前のリストに混ぜない', async () => {
+    const { storage, remote, path, visibility } = await setup();
+    await storage.backend.write(path, encode('# 公開する記事\n\n- parent\n  - child\n2025.1\n- next'));
+    await storage.refresh(); await visibility('public');
+    expect(decode(remote.files.get(remote.index.articles[0].markdownPath)!)).toContain('  - child\n\n2025.1');
+  });
   it('初期状態は何も送らず、選択した記事と実際に参照する画像だけを同じコミットへ保存する', async () => {
     const { storage, remote, publisher, path, visibility } = await setup();
     const secret = await storage.createNote('秘密の記事'); await storage.saveNote(secret, '# 秘密の記事\n\n秘密の本文');

@@ -1,4 +1,5 @@
 import { parser } from '@lezer/markdown';
+import { normalizeMarkdownLayout } from './markdown-layout';
 
 export interface TextRange { from: number; to: number }
 export interface Reference extends TextRange { kind: 'page' | 'url' | 'tag'; value: string; label?: string; contentFrom?: number; contentTo?: number }
@@ -82,10 +83,10 @@ const encodePathSegment = (value: string) => encodeURIComponent(value).replace(/
 const urlDestination = (value: string) => value.replace(/[()]/g, character => character === '(' ? '%28' : '%29');
 
 export function toMarkdown(text: string, _resolvePath: (name: string) => string = pagePath): string {
-  return replaceRanges(text, scanReferences(text).filter(ref => ref.kind === 'url').map(ref => ({
+  return normalizeMarkdownLayout(replaceRanges(text, scanReferences(text).filter(ref => ref.kind === 'url').map(ref => ({
     ...ref,
     text: `[${ref.label ?? ref.value}](${urlDestination(ref.value)})`,
-  })));
+  }))));
 }
 
 export function fromMarkdown(text: string, resolveInternal?: (label: string, target: string) => boolean): string {

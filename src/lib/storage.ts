@@ -10,6 +10,7 @@ import { isPaperPath, type PaperNotebook } from './paper-notebook';
 import { diskImagePaths } from './image-paths';
 import { publicationDocument, withPublication, type Publication } from './publication';
 import { workspaceLock } from './workspace';
+import { normalizeMarkdownLayout } from './markdown-layout';
 
 export interface Settings {
   folder: string;
@@ -282,6 +283,7 @@ export class StorageManager {
   private listeners = new Set<(event: StorageEvent) => void>();
   private titlePaths = new Map<string, string>();
   private noteCache = new Map<string, { hash: string; note: Note }>();
+  private layoutHashes = new Map<string, string>();
   constructor(readonly backend: LocalBackend, private remote: RemoteBackend | null = null) {}
   get hasHistory() { return Object.keys(this.manifest.files).length > 0; }
   onChange(listener: (event: StorageEvent) => void) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
@@ -386,7 +388,7 @@ export class StorageManager {
     if (await this.backend.read(path)) throw new Error('同名の記事があるため復元できません。');
     const document = publicationDocument(decoder.decode(bytes));
     const publication = document.publication ? { ...document.publication, visibility: 'private' as const, parent: document.publication.revision, revision: crypto.randomUUID() } : undefined;
-    await this.saveBytes(path, encoder.encode(withPublication(document.body, publication)));
+    await this.saveBytes(path, encoder.encode(withPublication(normalizeMarkdownLayout(document.body), publication)));
   }
   async setPublication(path: string, publication: Publication) {
     if (isPaperPath(path)) throw new Error('Paper 文書は公開できません。Markdown の記事を選択してください。');
@@ -454,6 +456,39 @@ export class StorageManager {
     this.emit({ type: 'files' }); void this.sync();
     return savedPath;
   }
+  /** Normalize existing files once per content version. Keep original bytes,
+   * filenames, publication intent and edit dates; never touch deleted notes. */
+  async migrateMarkdownLayout(): Promise<number> {
+    let count = 0;
+    await this.exclusive(async () => {
+      const changes: { path: string; before: Uint8Array; bytes: Uint8Array; entry: SyncEntry }[] = [];
+      for (const [path, entry] of Object.entries(this.manifest.files)) {
+        if (!/\.md$/i.test(path) || entry.deleted || this.layoutHashes.get(path) === entry.sha256) continue;
+        const before = await this.backend.read(path);
+        if (!before) continue;
+        const document = publicationDocument(decoder.decode(before));
+        const body = normalizeMarkdownLayout(document.body);
+        if (body === document.body) { this.layoutHashes.set(path, entry.sha256); continue; }
+        changes.push({ path, before, bytes: encoder.encode(withPublication(body, document.publication)), entry });
+      }
+      if (!changes.length) return;
+      const backup = `.trash/markdown-layout-${crypto.randomUUID()}`;
+      // Complete all backups before replacing the first original.
+      for (const item of changes) await this.backend.write(`${backup}/${item.path}`, item.before);
+      try {
+        for (const item of changes) await this.writeIndexed(item.path, item.bytes, { ...item.entry, sha256: await sha256(item.bytes) });
+        await this.persistIndex();
+      } catch (error) {
+        for (const item of changes) { await this.backend.write(item.path, item.before); this.manifest.files[item.path] = item.entry; }
+        await this.persistIndex();
+        throw error;
+      }
+      for (const item of changes) this.layoutHashes.set(item.path, this.manifest.files[item.path].sha256);
+      count = changes.length;
+    });
+    if (count) { this.emit({ type: 'files' }); void this.sync(); }
+    return count;
+  }
   private async renameNotes(moves: ReadonlyMap<string, string>) {
     if (!moves.size) return;
     const writes: { from: string; to: string; before: Uint8Array; bytes: Uint8Array; entry: SyncEntry }[] = [];
@@ -507,7 +542,7 @@ export class StorageManager {
     if (this.manifest.files[path]?.sha256 !== hash || this.manifest.files[path]?.deleted) {
       if (expectedText !== undefined) {
         const existing = await this.backend.read(path);
-        if (existing && this.editorText(decoder.decode(existing)) !== expectedText) {
+        if (existing && toMarkdown(this.editorText(decoder.decode(existing))) !== toMarkdown(expectedText)) {
           const conflict = `${path.slice(0, -3)} (conflict ${Date.now()}-${crypto.randomUUID().slice(0, 6)}).md`;
           await this.writeIndexed(conflict, encoder.encode(publicationDocument(decoder.decode(existing)).body));
         }

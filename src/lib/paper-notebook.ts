@@ -73,7 +73,7 @@ export class PaperNotebook {
       if (!doc) throw new Error('Paper の文書が見つかりません。');
       const markdown = toMarkdown(text);
       if (doc.markdown === markdown) { if (doc.dirty) await this.persist(); return; }
-      if (expectedText !== undefined && fromMarkdown(doc.markdown) !== expectedText) await this.backend.write(`.paper/backups/${crypto.randomUUID()}.md`, encoder.encode(doc.markdown));
+      if (expectedText !== undefined && toMarkdown(fromMarkdown(doc.markdown)) !== toMarkdown(expectedText)) await this.backend.write(`.paper/backups/${crypto.randomUUID()}.md`, encoder.encode(doc.markdown));
       this.documents.set(path, { ...doc, markdown, dirty: true, updatedAt: Date.now() });
       await this.persist();
     });

@@ -31,6 +31,16 @@ async function setup(remote: RemoteBackend | null = null) {
 }
 
 describe('ローカル保存と差分同期', () => {
+  it('既存ファイルを整形した後は R2 も修正し、書式の変更だけで競合コピーを作らない', async () => {
+    const remote = new MemoryRemote(); const a = await setup(remote);
+    await a.backend.write('note.md', encode('# note\n\n- item\n2025.1')); await a.manager.refresh(); await a.manager.sync();
+    const b = await setup(remote); await b.manager.sync();
+    expect(await b.manager.migrateMarkdownLayout()).toBe(1); await b.manager.sync();
+    expect(decode((await remote.get('note.md'))!.bytes)).toBe('# note\n\n- item\n\n2025.1');
+    await a.manager.sync();
+    expect((await a.manager.listNotes()).filter(note => note.path.includes('conflict'))).toHaveLength(0);
+    expect(await a.manager.readNote('note.md')).toContain('- item\n\n2025.1');
+  });
   it('標準 Markdown を保存し、リンクとタグを復元する', async () => {
     const { backend, manager } = await setup();
     const path = await manager.createNote('日記');
