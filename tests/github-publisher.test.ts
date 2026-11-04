@@ -118,13 +118,16 @@ describe('GitHub 記事公開', () => {
   it('Git Database API を使い、force:false で本文と一覧を一括コミットする', async () => {
     const calls: { path: string; method: string; body: any }[] = [];
     const fetcher = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const path = String(input).replace('https://api.github.com/repos/a/b/', ''); const method = init?.method || 'GET'; const body = init?.body ? JSON.parse(String(init.body)) : undefined; calls.push({ path, method, body });
+      const url = String(input);
+      if (url === 'https://api.github.com/repos/a/b/') return new Response(JSON.stringify({ message: 'Not Found' }), { status: 404 });
+      const path = url === 'https://api.github.com/repos/a/b' ? '' : url.replace('https://api.github.com/repos/a/b/', ''); const method = init?.method || 'GET'; const body = init?.body ? JSON.parse(String(init.body)) : undefined; calls.push({ path, method, body });
       expect((init?.headers as any).Authorization).toBe('Bearer fake-token');
       const data = path === '' ? { private: false } : path.startsWith('git/ref/') ? { object: { sha: 'old' } } : path === 'git/commits/old' ? { tree: { sha: 'base' } } : path.startsWith('git/trees/base') ? { tree: [], truncated: false } : { sha: method === 'PATCH' ? 'done' : path };
       return new Response(JSON.stringify(data));
     });
     const remote = new GitHubRepository('a/b', 'main', 'fake-token', fetcher as typeof fetch);
     const snapshot = await remote.snapshot(); await remote.commit(snapshot, [{ path: 'posts/test.md', bytes: encode('# test') }, { path: 'index.json', bytes: encode('{}') }], 'publish', async () => true);
+    expect(fetcher.mock.calls[0][0]).toBe('https://api.github.com/repos/a/b');
     expect(calls.filter(call => call.path === 'git/blobs')).toHaveLength(2);
     const tree = calls.find(call => call.path === 'git/trees')!.body; expect(tree.base_tree).toBe('base'); expect(tree.tree.map((entry: any) => entry.path)).toEqual(['posts/test.md', 'index.json']);
     expect(calls.at(-1)).toMatchObject({ path: 'git/refs/heads/main', method: 'PATCH', body: { force: false } });

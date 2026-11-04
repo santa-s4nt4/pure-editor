@@ -55,7 +55,7 @@ type Change = { path: string; bytes: Uint8Array | null };
 export class GitHubRepository {
   constructor(readonly repository: string, readonly branch: string, private token: string, private fetcher: Fetch = nativeFetch as Fetch) { validatePublishingTarget(repository, branch); }
   private async request(path: string, method = 'GET', body?: unknown): Promise<any> {
-    const response = await this.fetcher(`https://api.github.com/repos/${this.repository}/${path}`, {
+    const response = await this.fetcher(`https://api.github.com/repos/${this.repository}${path ? `/${path}` : ''}`, {
       method, headers: { 'User-Agent': 'pure-editor', Accept: 'application/vnd.github+json', Authorization: `Bearer ${this.token}`, 'X-GitHub-Api-Version': '2022-11-28', ...(body ? { 'Content-Type': 'application/json' } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(45_000),
     });
