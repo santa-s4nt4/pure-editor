@@ -110,3 +110,5 @@ npm run test:e2e
 # pure-editor
 
 記事を GitHub 経由で poin7s.com に公開するには、[GitHub 公開の設定](docs/github-publishing.md)を参照してください。すべての記事は初期状態で非公開です。
+
+GitHub Actions が実行待ちのまま進まない場合や、配布を再実行する場合は、[配布ビルドの確認と再実行](docs/releases.md)を参照してください。
