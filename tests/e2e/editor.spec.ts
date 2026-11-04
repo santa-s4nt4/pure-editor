@@ -509,3 +509,68 @@ test('Tab・Shift Tabで変えた入れ子の位置をEnterでも維持する', 
   await editor.press('Shift+Tab'); await editor.press('Enter'); await editor.pressSequentially('次の文');
   await expect(page.locator('.cm-line').last()).toHaveText('      次の文');
 });
+
+async function fingerSwipe(page: Page, from: { x: number; y: number }, to: { x: number; y: number }, cancel = false) {
+  const session = await page.context().newCDPSession(page);
+  try {
+    await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ ...from, id: 1 }] });
+    for (let step = 1; step <= 8; step++) {
+      await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: from.x + (to.x - from.x) * step / 8, y: from.y + (to.y - from.y) * step / 8, id: 1 }] });
+      await page.waitForTimeout(16);
+    }
+    await session.send('Input.dispatchTouchEvent', { type: cancel ? 'touchCancel' : 'touchEnd', touchPoints: [] });
+  } finally { await session.detach(); }
+}
+
+test('iPhoneは画面端のスワイプで履歴を往復し、縦スクロールと短い操作では移動しない', async ({ page, isMobile }) => {
+  test.skip(!isMobile, 'iPhone のタッチ操作');
+  await newNote(page, isMobile, '履歴 A');
+  await newNote(page, isMobile, '履歴 B');
+  const editor = page.getByRole('textbox', { name: 'ノート本文' });
+  await editor.fill(`# 履歴 B\n\n${'長い本文です。\n'.repeat(120)}`);
+  const width = page.viewportSize()!.width;
+  await fingerSwipe(page, { x: 8, y: 300 }, { x: 145, y: 305 });
+  await expect(page).toHaveTitle('履歴 A — pure'); await expect(page.getByRole('dialog')).not.toBeVisible();
+  await fingerSwipe(page, { x: width - 8, y: 300 }, { x: width - 145, y: 302 });
+  await expect(page).toHaveTitle('履歴 B — pure');
+  await fingerSwipe(page, { x: 8, y: 300 }, { x: 38, y: 302 });
+  await expect(page).toHaveTitle('履歴 B — pure');
+  await fingerSwipe(page, { x: 8, y: 550 }, { x: 12, y: 300 });
+  await expect(page).toHaveTitle('履歴 B — pure');
+  await expect.poll(() => page.locator('.cm-scroller').evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+});
+
+test('iPhoneのトップで左スワイプ削除と取り消しができ、トップに留まる', async ({ page, isMobile }) => {
+  test.skip(!isMobile, 'iPhone のスワイプ削除');
+  await newNote(page, isMobile, '削除しない記事'); await newNote(page, isMobile, '削除する記事');
+  await palette(page, isMobile); await page.getByRole('button', { name: 'トップページに戻る', exact: true }).tap();
+  const row = page.locator('.note-card').filter({ has: page.getByRole('button', { name: '削除する記事', exact: true }) });
+  const bounds = await row.boundingBox(); const y = bounds!.y + bounds!.height / 2;
+  await fingerSwipe(page, { x: bounds!.x + bounds!.width * .6, y }, { x: bounds!.x + bounds!.width * .6 - 90, y });
+  await expect(row.getByRole('button', { name: '削除する記事を削除', exact: true })).toBeVisible();
+  await expect(page).toHaveTitle('pure');
+  await row.getByRole('button', { name: '削除する記事を削除', exact: true }).tap();
+  await expect(page.getByRole('button', { name: '削除する記事', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '削除しない記事', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '元に戻す', exact: true }).tap();
+  await expect(page.getByRole('button', { name: '削除する記事', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: '記事一覧' })).toBeVisible(); await expect(page).toHaveTitle('pure');
+});
+
+test('iPhoneの深いスワイプは削除し、キャンセルや縦の動きは削除しない', async ({ page, isMobile }) => {
+  test.skip(!isMobile, 'iPhone のスワイプ削除');
+  await newNote(page, isMobile, '深いスワイプ');
+  await palette(page, isMobile); await page.getByRole('button', { name: 'トップページに戻る', exact: true }).tap();
+  const row = page.locator('.note-card').filter({ has: page.getByRole('button', { name: '深いスワイプ', exact: true }) });
+  const bounds = await row.boundingBox(); const y = bounds!.y + bounds!.height / 2;
+  const start = { x: bounds!.x + bounds!.width - 20, y }; const end = { x: bounds!.x + 10, y };
+  await fingerSwipe(page, start, end, true);
+  await expect(page.getByRole('button', { name: '深いスワイプ', exact: true })).toBeVisible();
+  await expect(row).not.toHaveClass(/is-revealed/);
+  await fingerSwipe(page, { x: bounds!.x + 120, y }, { x: bounds!.x + 124, y: y + 80 });
+  await expect(row).not.toHaveClass(/is-revealed/);
+  const current = await row.boundingBox();
+  await fingerSwipe(page, { x: current!.x + current!.width - 20, y: current!.y + current!.height / 2 }, { x: current!.x + 10, y: current!.y + current!.height / 2 });
+  await expect(page.getByRole('button', { name: '深いスワイプ', exact: true })).toHaveCount(0);
+  await expect(page).toHaveTitle('pure');
+});

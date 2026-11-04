@@ -9,6 +9,7 @@ import { scrollIndicator } from './lib/scrollbar';
 import { NavigationHistory, type Visit } from './lib/navigation';
 import { filenameTitle } from './lib/note-filenames';
 import { articleOutline, type OutlineHeading } from './lib/outline';
+import { TouchSwipe, rowActionWidth, rowSwipeOffset, touchHistoryProgress } from './lib/touch-gestures';
 import { HistorySwipe, outlineScrollsArticle, wheelDistance } from './lib/gestures';
 import { PaperNotebook, isPaperPath } from './lib/paper-notebook';
 import { createPaperClient } from './lib/paper-native';
@@ -34,7 +35,8 @@ export default function App() {
   const [homeQuery, setHomeQuery] = createSignal('');
   const [homeTag, setHomeTag] = createSignal('');
   const [activeTitle, setActiveTitle] = createSignal('');
-  const [deleted, setDeleted] = createSignal<{ path: string; backup: string } | null>(null);
+  const [deleted, setDeleted] = createSignal<{ path: string; backup: string; fromHome?: boolean } | null>(null);
+  const [swipedRow, setSwipedRow] = createSignal<{ path: string; offset: number; dragging: boolean; full: boolean } | null>(null);
   const [palette, setPalette] = createSignal(false);
   const [screen, setScreen] = createSignal<'notes' | 'settings'>('notes');
   const [query, setQuery] = createSignal('');
@@ -68,7 +70,6 @@ export default function App() {
   let loadedVersion = { text: '' };
   let disposed = false;
   let refreshing = false;
-  let touchStart: { x: number; y: number } | null = null;
   let creating = false;
   let clearOutline: (() => void) | undefined;
   let measureOutline = () => {};
@@ -222,7 +223,7 @@ export default function App() {
       if (text === null) throw new Error('ノートが見つかりません。');
       if (!restore) history.push({ kind: 'note', path }, currentVisit());
       clearOutline?.(); clearOutline = undefined; editor?.destroy();
-      setHome(false);
+      setSwipedRow(null); setHome(false);
       setActivePath(path);
       loadedVersion = { text };
       const recovered = localStorage.getItem(journalKey(path));
@@ -249,7 +250,7 @@ export default function App() {
     await flush();
     if (!restore) history.push({ kind: 'home', tag }, currentVisit());
     clearOutline?.(); clearOutline = undefined; editor?.destroy(); editor = undefined; dirty = false;
-    setActivePath(''); setHome(true); setHomeTag(tag); setHomeQuery(restore?.query ?? ''); document.title = tag ? `${tag} — pure` : 'pure'; closePalette(); await reloadNotes();
+    setSwipedRow(null); setActivePath(''); setHome(true); setHomeTag(tag); setHomeQuery(restore?.query ?? ''); document.title = tag ? `${tag} — pure` : 'pure'; closePalette(); await reloadNotes();
     requestAnimationFrame(() => { if (home()) homeScroller.scrollTop = restore?.scroll ?? 0; });
   }
   async function newPage() {
@@ -262,20 +263,29 @@ export default function App() {
       editor?.view.dispatch({ selection: { anchor: 2 } }); editor?.view.focus();
     } finally { creating = false; }
   }
-  async function deleteCurrent() {
-    if (!editor || home() || palette() || busy()) return;
+  async function deleteArticle(path: string) {
+    if (busy() || !ready()) return;
     setBusy(true);
     try {
-      await flush();
-      const path = activePath(); const backup = await storage.deleteNote(path);
-      localStorage.removeItem(journalKey(path)); setDeleted({ path, backup });
-      await goHome(); report('記事を削除しました。');
-    } catch (error) { report(String(error)); }
+      await flush(); path = storage.resolvePath(path);
+      const fromHome = home(); const backup = await storage.deleteNote(path);
+      localStorage.removeItem(journalKey(path)); setDeleted({ path, backup, fromHome }); setSwipedRow(null);
+      if (!fromHome && activePath() === path) await goHome();
+      else await reloadNotes();
+      report('記事を削除しました。');
+    } catch (error) { setSwipedRow(null); report(String(error)); }
     finally { setBusy(false); }
+  }
+  async function deleteCurrent() {
+    if (!editor || home() || palette() || busy()) return;
+    await deleteArticle(activePath());
   }
   async function restoreDeleted() {
     const entry = deleted(); if (!entry) return;
-    try { await storage.restoreNote(entry.path, entry.backup); setDeleted(null); setMessage(''); await openNote(entry.path); }
+    try {
+      await storage.restoreNote(entry.path, entry.backup); setDeleted(null); setMessage('');
+      if (entry.fromHome) await reloadNotes(); else await openNote(entry.path);
+    }
     catch (error) { report(String(error)); }
   }
   async function followReference(reference: Reference) {
@@ -352,6 +362,7 @@ export default function App() {
     clickTimer = setTimeout(() => { if (home() && !palette()) void openNote(path).catch(error => report(String(error))); }, doubleClickDelay + 30);
   }
   function openPalette(value = '') {
+    setSwipedRow(null);
     if (value !== pendingPaperFile?.name) setPaperMatches([]);
     setScreen('notes'); setQuery(value); setSelected(0); setPalette(true);
     void reloadNotes().catch(error => report(String(error)));
@@ -565,6 +576,78 @@ export default function App() {
       if (nativeTrackpadReady) return;
       if (handleSwipe(event, event.target instanceof Element ? event.target : null) && event.cancelable) event.preventDefault();
     };
+    type Contact = { id: number; gesture: TouchSwipe; mode: 'history' | 'row'; direction: -1 | 1; path: string; initial: number; width: number };
+    let contact: Contact | null = null;
+    let suppressClickUntil = 0;
+    const cancelTouch = () => { contact = null; setSwipeHint(null); setSwipedRow(null); };
+    const touchstart = (event: TouchEvent) => {
+      if (!mobile) return;
+      clearTimeout(hintTimer); setSwipeHint(null); suppressClickUntil = 0;
+      if (event.touches.length !== 1 || !ready() || busy() || palette()) { cancelTouch(); return; }
+      const target = event.target instanceof Element ? event.target : null;
+      if (!target || target.closest('input, textarea, select, iframe, .cm-tooltip, .palette-trigger, .notice, .note-delete')) { contact = null; return; }
+      if (window.getSelection()?.toString() || !home() && editor && !editor.view.state.selection.main.empty) { cancelTouch(); return; }
+      const touch = event.touches[0]; const width = paper.clientWidth;
+      const edge = touch.clientX <= 24 ? -1 : touch.clientX >= width - 24 ? 1 : null;
+      if (edge) {
+        setSwipedRow(null);
+        contact = { id: touch.identifier, gesture: new TouchSwipe({ x: touch.clientX, y: touch.clientY, time: performance.now() }), mode: 'history', direction: edge, path: '', initial: 0, width };
+        return;
+      }
+      const card = home() ? target.closest<HTMLElement>('.note-card[data-note-path]') : null;
+      const path = card?.dataset.notePath;
+      if (card && path && !isPaperPath(path)) {
+        const initial = swipedRow()?.path === path ? swipedRow()!.offset : 0;
+        if (swipedRow()?.path !== path) setSwipedRow(null);
+        contact = { id: touch.identifier, gesture: new TouchSwipe({ x: touch.clientX, y: touch.clientY, time: performance.now() }), mode: 'row', direction: -1, path, initial, width: card.clientWidth };
+      } else { contact = null; setSwipedRow(null); }
+    };
+    const touchmove = (event: TouchEvent) => {
+      if (!contact) return;
+      if (event.touches.length !== 1 || event.touches[0].identifier !== contact.id || palette() || busy()) { cancelTouch(); return; }
+      const touch = event.touches[0]; const result = contact.gesture.move({ x: touch.clientX, y: touch.clientY, time: performance.now() });
+      if (result.cancelled) { cancelTouch(); return; }
+      if (!result.claimed) return;
+      if (contact.mode === 'history' && (result.dx > 0 ? -1 : 1) !== contact.direction) { cancelTouch(); return; }
+      event.preventDefault(); event.stopPropagation(); suppressClickUntil = performance.now() + 450;
+      if (contact.mode === 'history') {
+        const hint = touchHistoryProgress(result.dx, contact.width);
+        setSwipeHint({ side: contact.direction, progress: hint.progress, available: history.canMove(contact.direction, visit => visit.kind === 'home' || notes().some(note => note.path === visit.path)), committed: false });
+      } else {
+        const row = rowSwipeOffset(result.dx, contact.initial, contact.width);
+        setSwipedRow({ path: contact.path, offset: row.offset, dragging: true, full: row.full });
+      }
+    };
+    const touchend = (event: TouchEvent) => {
+      if (!contact) return;
+      const touch = [...event.changedTouches].find(touch => touch.identifier === contact!.id);
+      if (!touch) { cancelTouch(); return; }
+      const current = contact; contact = null;
+      const result = current.gesture.move({ x: touch.clientX, y: touch.clientY, time: performance.now() });
+      if (!result.claimed) { setSwipeHint(null); return; }
+      event.preventDefault(); event.stopPropagation(); suppressClickUntil = performance.now() + 450;
+      if (current.mode === 'history') {
+        const hint = touchHistoryProgress(result.dx, current.width);
+        if (hint.complete && (result.dx > 0 ? -1 : 1) === current.direction) void travel(current.direction);
+        clearTimeout(hintTimer); hintTimer = setTimeout(() => setSwipeHint(null), 180);
+      } else {
+        const row = rowSwipeOffset(result.dx, current.initial, current.width);
+        if (row.full) { setSwipedRow({ path: current.path, offset: -current.width, dragging: false, full: true }); void deleteArticle(current.path); }
+        else setSwipedRow(row.open ? { path: current.path, offset: -rowActionWidth, dragging: false, full: false } : null);
+      }
+    };
+    const click = (event: MouseEvent) => {
+      if (!mobile || event.detail === 0) return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (performance.now() < suppressClickUntil) { event.preventDefault(); event.stopImmediatePropagation(); return; }
+      if (swipedRow() && target?.closest('.note-card')?.getAttribute('data-note-path') === swipedRow()!.path && !target.closest('.note-delete')) {
+        setSwipedRow(null); event.preventDefault(); event.stopImmediatePropagation();
+      }
+    };
+    paper.addEventListener('touchstart', touchstart, { capture: true, passive: true });
+    paper.addEventListener('touchmove', touchmove, { capture: true, passive: false });
+    paper.addEventListener('touchend', touchend, { capture: true, passive: false });
+    paper.addEventListener('touchcancel', cancelTouch, true); paper.addEventListener('click', click, true);
     paper.addEventListener('wheel', wheel, { capture: true, passive: false });
     const paperDrop = (event: DragEvent) => {
       const file = [...(event.dataTransfer?.files ?? [])].find(file => /\.paper$/i.test(file.name));
@@ -583,6 +666,7 @@ export default function App() {
     const retry = setInterval(() => { if (ready() && document.visibilityState === 'visible' && navigator.onLine) { void storage.sync(); void paperNotebook?.sync(); } }, 60_000);
     onCleanup(() => {
       disposed = true; clearTimeout(hintTimer); clearTimeout(clickTimer); clearTimeout(timer); clearTimeout(toastTimer); clearInterval(retry);
+      paper.removeEventListener('touchstart', touchstart, true); paper.removeEventListener('touchmove', touchmove, true); paper.removeEventListener('touchend', touchend, true); paper.removeEventListener('touchcancel', cancelTouch, true); paper.removeEventListener('click', click, true);
       paper.removeEventListener('wheel', wheel, true); paper.removeEventListener('drop', paperDrop, true); paper.removeEventListener('dragover', paperDrag);
       window.removeEventListener('keydown', keydown, true); document.removeEventListener('visibilitychange', visibility);
       window.removeEventListener('pagehide', pagehide); window.removeEventListener('online', online); window.removeEventListener('focus', online);
@@ -590,21 +674,17 @@ export default function App() {
     });
   });
 
-  return <main ref={paper} class="paper" aria-label="pure" onTouchStart={event => {
-    const touch = event.touches[0];
-    touchStart = touch.clientX < 28 ? { x: touch.clientX, y: touch.clientY } : null;
-  }} onTouchEnd={event => {
-    const touch = event.changedTouches[0];
-    if (ready() && touchStart && touch.clientX - touchStart.x > 75 && Math.abs(touch.clientY - touchStart.y) < 60) openPalette();
-    touchStart = null;
-  }}>
+  return <main ref={paper} class="paper" aria-label="pure">
     <input type="file" accept=".paper" hidden ref={paperFileInput} aria-label="Paper ファイルを選択" onChange={event => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ''; if (file) void importPaperFile(file).catch(error => report(String(error))); }} />
     <Show when={native && !mobile}><div class="native-title-region" data-tauri-drag-region /></Show>
     <section class="home-surface" hidden={!home()} aria-label="記事一覧">
       <div class="home-scroll" ref={homeScroller}>
         <header class="home-heading"><h1><Show when={!homeTag()} fallback={homeTag()}><AnimatedWordmark active={home() && !palette()} /></Show></h1></header>
         <div class="home-search"><input type="search" aria-label="記事を探す" placeholder="タイトル、タグで探す" value={homeQuery()} onInput={event => setHomeQuery(event.currentTarget.value)} /><Show when={homeQuery()}><button type="button" onClick={() => setHomeQuery('')}>すべて</button></Show></div>
-        <div class="note-grid"><For each={homeNotes()}>{note => <article class="note-card"><button class="note-title" type="button" disabled={!ready()} onClick={event => activateNote(event, note.path)} onDblClick={() => { if (!mobile) { clearTimeout(clickTimer); void openArticleWindow(note.path); } }}>{note.title}</button><div class="note-tags"><For each={note.tags.slice(0, 3)}>{tag => <button type="button" onClick={() => void followReference({ kind: 'tag', value: tag, from: 0, to: 0 })}>{tag}</button>}</For><Show when={note.tags.length > 3}><span class="tags-more" title={note.tags.slice(3).join('、')}>…</span></Show></div></article>}</For></div>
+        <div class="note-grid"><For each={homeNotes()}>{note => <article class="note-card" data-note-path={note.path} classList={{ 'is-swiping': swipedRow()?.path === note.path && swipedRow()!.dragging, 'is-revealed': swipedRow()?.path === note.path && swipedRow()!.offset < 0, 'is-delete-ready': swipedRow()?.path === note.path && swipedRow()!.full }} style={{ '--row-offset': `${swipedRow()?.path === note.path ? swipedRow()!.offset : 0}px` }}>
+          <Show when={mobile && !isPaperPath(note.path)}><button class="note-delete" type="button" aria-label={`${note.title}を削除`} tabindex={swipedRow()?.path === note.path ? 0 : -1} disabled={busy()} onClick={() => void deleteArticle(note.path)}>削除</button></Show>
+          <div class="note-card-content"><button class="note-title" type="button" disabled={!ready() || busy()} onClick={event => activateNote(event, note.path)} onDblClick={() => { if (!mobile) { clearTimeout(clickTimer); void openArticleWindow(note.path); } }}>{note.title}</button><div class="note-tags"><For each={note.tags.slice(0, 3)}>{tag => <button type="button" onClick={() => void followReference({ kind: 'tag', value: tag, from: 0, to: 0 })}>{tag}</button>}</For><Show when={note.tags.length > 3}><span class="tags-more" title={note.tags.slice(3).join('、')}>…</span></Show></div></div>
+        </article>}</For></div>
         <Show when={ready() && homeNotes().length === 0}><p class="home-empty">{homeQuery() ? '見つかりませんでした。' : 'まだ、何も書かれていません。'}</p></Show>
       </div>
     </section>

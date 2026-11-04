@@ -190,3 +190,11 @@ button:disabled { cursor: wait; opacity: 0.5; }
 .history-swipe.is-forward.is-visible { transform: translateX(0); }
 .history-swipe.is-unavailable { color: var(--text-faint); }
 @media (prefers-reduced-motion: reduce) { .history-swipe { transition: none; } }
+@media (pointer: coarse) {
+  .note-card { position: relative; overflow: hidden; border-radius: .2rem; }
+  .note-card-content { position: relative; min-block-size: 3.5rem; padding-block: .4rem; background: var(--paper); transform: translate3d(var(--row-offset, 0px), 0, 0); transition: transform var(--motion-duration) var(--motion-easing); touch-action: pan-y pinch-zoom; }
+  .note-card.is-swiping .note-card-content { transition: none; }
+  .note-delete { position: absolute; inset-block: 0; inset-inline-end: 0; inline-size: max(4.75rem, calc(-1 * var(--row-offset, 0px))); padding-inline: 1rem; background: light-dark(#bc514b, #a34a47); color: #fff; font-size: .88em; text-align: end; visibility: hidden; }
+  .note-card.is-revealed .note-delete { visibility: visible; }
+  .note-card.is-delete-ready .note-delete { background: light-dark(#a73e39, #8d3e39); }
+}
