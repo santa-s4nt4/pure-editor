@@ -111,4 +111,4 @@ npm run test:e2e
 
 記事を GitHub 経由で poin7s.com に公開するには、[GitHub 公開の設定](docs/github-publishing.md)を参照してください。すべての記事は初期状態で非公開です。
 
-GitHub Actions が実行待ちのまま進まない場合や、配布を再実行する場合は、[配布ビルドの確認と再実行](docs/releases.md)を参照してください。
+配布 CI は Linux での検証・フロントエンド生成、独立した macOS / iOS のビルド、Linux での配布に分けています。片方だけ成功したパッケージも Actions の Artifacts に7日間残します。実行待ちや再実行、成果物の取得は、[配布ビルドの確認と再実行](docs/releases.md)を参照してください。
