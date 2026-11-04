@@ -20,7 +20,8 @@ export function tagContext(text: string, position: number) {
 
 export function matchingTags(tags: readonly string[], query: string): string[] {
   const fold = (value: string) => value.normalize('NFC').toLocaleLowerCase();
-  const needle = fold(query);
+  const needle = fold(query.trim());
+  if (!needle) return [];
   const counts = new Map<string, number>();
   for (const tag of tags) if (tag && !/[\[\]\n]/.test(tag)) counts.set(tag, (counts.get(tag) ?? 0) + 1);
   return [...counts.keys()].filter(tag => fold(tag).includes(needle)).sort((a, b) =>
@@ -32,7 +33,7 @@ export function tagCompletion(tags: () => readonly string[]): CompletionSource {
   return context => {
     if (!context.state.selection.main.empty) return null;
     const bracket = tagContext(context.state.doc.toString(), context.pos);
-    if (!bracket) return null;
+    if (!bracket || !bracket.query.trim()) return null;
     return {
       from: bracket.from, to: bracket.to, filter: false,
       options: matchingTags(tags(), bracket.query).map(label => ({

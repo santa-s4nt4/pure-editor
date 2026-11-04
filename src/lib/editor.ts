@@ -1,4 +1,5 @@
 import { autocompletion, completionKeymap } from '@codemirror/autocomplete';
+import { completionScrollbar } from './completion-scrollbar';
 import { tagCompletion } from './tag-completion';
 import { EditorState, EditorSelection, Prec, StateEffect, StateField, type Extension } from '@codemirror/state';
 import { Decoration, EditorView, WidgetType, drawSelection, dropCursor, keymap, placeholder, type DecorationSet } from '@codemirror/view';
@@ -377,7 +378,8 @@ export function createEditor(options: EditorOptions): { view: EditorView; destro
       doc: options.text,
       extensions: [
         ...(options.readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false), EditorState.transactionFilter.of(transaction => transaction.docChanged ? [] : transaction)] : []),
-        autocompletion({ override: [tagCompletion(options.tags)], activateOnTypingDelay: 75, defaultKeymap: false, icons: false }),
+        autocompletion({ override: [tagCompletion(options.tags)], activateOnTypingDelay: 75, defaultKeymap: false, icons: false, tooltipClass: () => 'tag-suggestions' }),
+        completionScrollbar,
         Prec.highest(keymap.of(completionKeymap)),
         EditorState.phrases.of({ Completions: 'タグの候補' }),
         history(), markdown(), syntaxHighlighting(highlighting), EditorView.lineWrapping, drawSelection(), dropCursor(),

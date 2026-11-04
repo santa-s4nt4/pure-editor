@@ -24,8 +24,9 @@ it('URL、コード、画像、Markdownリンク、タスク、角括弧の外�
 it('前方一致を優先し、頻度と部分一致で絞り、既存の表記を保持する', () => {
   expect(matchingTags(['本の感想', '読書', '読書', '読書メモ', '本の感想'], '書')).toEqual(['読書', '読書メモ']);
   expect(matchingTags(['myBook', 'Book', 'Book'], 'bo')).toEqual(['Book', 'myBook']);
-  expect(matchingTags(['読書', '読書', '音楽'], '')[0]).toBe('読書');
-  expect(matchingTags(Array.from({ length: 40 }, (_, i) => `タグ${i}`), '')).toHaveLength(30);
+  expect(matchingTags(['読書', '読書', '音楽'], '')).toEqual([]);
+  expect(matchingTags(['読書'], '   ')).toEqual([]);
+  expect(matchingTags(Array.from({ length: 40 }, (_, i) => `タグ${i}`), 'タグ')).toHaveLength(30);
 });
 
 it('選択したタグは括弧内全体を置換し、閉じ括弧の外へカーソルを移す', async () => {
@@ -40,5 +41,12 @@ it('選択したタグは括弧内全体を置換し、閉じ括弧の外へカ�
     apply(view as never, result!.options[0], result!.from, result!.to!);
     expect(next.doc.toString()).toBe('[読書メモ]');
     expect(next.selection.main.head).toBe(6);
+  }
+});
+
+it('空の括弧では明示的な補完操作でも候補を出さず、文字入力から始める', async () => {
+  for (const explicit of [true, false]) {
+    const state = EditorState.create({ doc: '[]', selection: { anchor: 1 } });
+    expect(await tagCompletion(() => ['読書'])(new CompletionContext(state, 1, explicit))).toBeNull();
   }
 });

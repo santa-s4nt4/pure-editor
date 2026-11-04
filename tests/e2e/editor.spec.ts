@@ -449,3 +449,29 @@ test('Paper のオフライン編集でも元のファイル名と参照ファ�
   }, path);
   expect(result).toEqual({ path, dirty: true, original: 'original reference' });
 });
+
+test('タグ候補は文字入力後から絞り込み、本文の書体と控えめなスクロール表示を使う', async ({ page, isMobile }) => {
+  await newNote(page, isMobile, 'タグ候補の表示');
+  const editor = page.getByRole('textbox', { name: 'ノート本文' });
+  await editor.fill(`# タグ候補の表示\n\n${Array.from({ length: 30 }, (_, i) => `[読書${String(i).padStart(2, '0')}]`).join(' ')} [音楽]\n\n`);
+  await page.waitForTimeout(2300);
+  await editor.press('Meta+ArrowDown'); await editor.pressSequentially('[');
+  const popup = page.locator('.tag-suggestions');
+  await page.waitForTimeout(180); await expect(popup).toHaveCount(0);
+  await editor.pressSequentially('読'); await expect(popup).toBeVisible();
+  await expect(popup.getByRole('option')).toHaveCount(30);
+  const styles = await popup.evaluate(element => {
+    const selected = element.querySelector('[aria-selected="true"]')!;
+    const list = element.querySelector('ul')!;
+    const content = document.querySelector('.cm-content')!;
+    return { font: getComputedStyle(list).fontFamily, bodyFont: getComputedStyle(content).fontFamily, color: getComputedStyle(selected).color, bodyColor: getComputedStyle(content).color, scrollbar: getComputedStyle(list).scrollbarWidth, overflowing: list.scrollHeight > list.clientHeight };
+  });
+  expect(styles.font).toBe(styles.bodyFont); expect(styles.color).toBe(styles.bodyColor);
+  expect(styles.scrollbar).toBe('none'); expect(styles.overflowing).toBe(true);
+  await popup.locator('ul').evaluate(element => { element.scrollTop = 90; });
+  await expect(popup.locator('.scroll-indicator')).toHaveClass(/is-scrolling/);
+  await expect(popup.locator('.scroll-indicator')).not.toHaveClass(/is-scrolling/);
+  await editor.press('Backspace'); await expect(popup).toHaveCount(0);
+  await editor.pressSequentially('読書02'); await expect(popup.getByRole('option')).toHaveCount(1);
+  await editor.press('Enter'); await expect(popup).toHaveCount(0);
+});

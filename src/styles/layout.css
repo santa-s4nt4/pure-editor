@@ -168,11 +168,14 @@ button:disabled { cursor: wait; opacity: 0.5; }
 @keyframes appear { from { opacity: 0; transform: translateY(0.4rem); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
 
-/* Existing tags share the quiet palette used by inline references. */
-.cm-tooltip.cm-tooltip-autocomplete { background: var(--paper); color: var(--text-ink); border: 1px solid var(--text-faint); border-radius: 4px; box-shadow: 0 3px 14px #00000012; font: inherit; }
-.cm-tooltip.cm-tooltip-autocomplete > ul { font-family: inherit; max-height: 14em; }
-.cm-tooltip.cm-tooltip-autocomplete > ul > li { padding: .25em .7em; }
-.cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected] { background: var(--selection); color: var(--text-ink); }
+/* Tag suggestions use the article's typography and the same quiet scroll indicator. */
+.cm-editor .cm-tooltip.cm-tooltip-autocomplete.tag-suggestions { overflow: hidden; background: var(--paper); color: var(--text-muted); border: 1px solid color-mix(in oklch, var(--text-ink) 9%, transparent); border-radius: .3rem; box-shadow: 0 .2rem .8rem #00000008; font-family: var(--font-family-body); font-size: var(--font-size-body); font-weight: 400; letter-spacing: var(--letter-spacing-body); }
+.cm-editor .cm-tooltip.cm-tooltip-autocomplete.tag-suggestions > ul { min-width: 0; max-width: min(22rem, calc(100vw - 3rem)); height: auto; max-height: min(12rem, 35dvh); padding: .25em; font: inherit; letter-spacing: inherit; scrollbar-width: none; overscroll-behavior: contain; }
+.cm-editor .cm-tooltip.cm-tooltip-autocomplete.tag-suggestions > ul::-webkit-scrollbar { display: none; width: 0; height: 0; }
+.cm-editor .cm-tooltip.cm-tooltip-autocomplete.tag-suggestions > ul > li { padding: .15em .65em; line-height: 1.8; border-radius: .15rem; font-weight: 400; }
+.cm-editor .cm-tooltip.cm-tooltip-autocomplete.tag-suggestions > ul > li[aria-selected="true"] { background: var(--surface-hover); color: var(--text-ink); }
+.cm-editor .cm-tooltip.cm-tooltip-autocomplete.tag-suggestions .cm-completionLabel { font: inherit; }
+.cm-editor .cm-tooltip.cm-tooltip-autocomplete.tag-suggestions .scroll-indicator { inset-block: .25em; inset-inline-end: .15rem; }
 
 .history-swipe { position: fixed; top: 50%; left: .7rem; z-index: 10; width: 1.7rem; height: 1.7rem; border-radius: 50%; background: var(--paper-raised); color: var(--text-muted); box-shadow: 0 0 0 1px var(--surface-hover); display: grid; place-items: center; pointer-events: none; opacity: 0; transform: translateX(-.4rem); transition: opacity 160ms ease-out, transform 160ms ease-out; }
 .history-swipe span { font: 1.5rem/1 sans-serif; transform: translateY(-.07em); }
