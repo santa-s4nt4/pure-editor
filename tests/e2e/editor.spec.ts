@@ -475,3 +475,37 @@ test('タグ候補は文字入力後から絞り込み、本文の書体と控�
   await editor.pressSequentially('読書02'); await expect(popup.getByRole('option')).toHaveCount(1);
   await editor.press('Enter'); await expect(popup).toHaveCount(0);
 });
+
+test('入れ子の箇条書き・チェック・番号付きリストの折り返しを本文の開始位置に揃える', async ({ page, isMobile }) => {
+  await newNote(page, isMobile, '折り返し');
+  const editor = page.getByRole('textbox', { name: 'ノート本文' });
+  await editor.fill(`# 折り返し\n\n- 親\n   - 子\n      - ${'あ'.repeat(180)}\n   - [ ] ${'い'.repeat(180)}\n   1. ${'う'.repeat(180)}\n\n- タブの親\n \t - ${'え'.repeat(180)}\n   1.\t${'お'.repeat(180)}\n`);
+  const wrapped = async (character: string) => {
+    const line = page.locator('.cm-hanging-list').filter({ hasText: character.repeat(20) });
+    await line.scrollIntoViewIfNeeded();
+    await expect.poll(() => line.evaluate((element, character) => {
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT); const range = document.createRange();
+      let first: DOMRect | undefined;
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) for (let i = 0; i < (node.textContent?.length ?? 0); i++) {
+        if (node.textContent![i] !== character) continue;
+        range.setStart(node, i); range.setEnd(node, i + 1); const rect = range.getBoundingClientRect();
+        if (!first) first = rect;
+        else if (rect.top > first.top + 3) return Math.abs(rect.left - first.left);
+      }
+      return 1000;
+    }, character)).toBeLessThan(1);
+  };
+  await wrapped('あ'); await wrapped('い'); await wrapped('う'); await wrapped('え'); await wrapped('お');
+  if (!isMobile) { await page.setViewportSize({ width: 1440, height: 1000 }); await wrapped('あ'); }
+});
+
+test('Tab・Shift Tabで変えた入れ子の位置をEnterでも維持する', async ({ page, isMobile }) => {
+  await newNote(page, isMobile, '改行のインデント');
+  const editor = page.getByRole('textbox', { name: 'ノート本文' });
+  await editor.fill('- 親\n   - 子\n      - 先の子\n      - 本文');
+  await editor.press('Meta+ArrowDown'); await editor.press('Tab');
+  await editor.press('Enter'); await editor.pressSequentially('続き');
+  await expect(page.locator('.cm-line').last()).toHaveText('         続き');
+  await editor.press('Shift+Tab'); await editor.press('Enter'); await editor.pressSequentially('次の文');
+  await expect(page.locator('.cm-line').last()).toHaveText('      次の文');
+});

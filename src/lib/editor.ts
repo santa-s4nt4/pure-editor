@@ -1,5 +1,6 @@
 import { autocompletion, completionKeymap } from '@codemirror/autocomplete';
 import { completionScrollbar } from './completion-scrollbar';
+import { ListTabWidget, hangingIndent, listLayout, listPrefixMeasurements } from './list-layout';
 import { tagCompletion } from './tag-completion';
 import { EditorState, EditorSelection, Prec, StateEffect, StateField, type Extension } from '@codemirror/state';
 import { Decoration, EditorView, WidgetType, drawSelection, dropCursor, keymap, placeholder, type DecorationSet } from '@codemirror/view';
@@ -45,8 +46,7 @@ function styleMediaList(container: HTMLElement, prefix: string, sourceVisible: b
   if (!prefix) return;
   container.classList.add('is-list');
   container.classList.toggle('has-source', sourceVisible);
-  const indent = /^\s*/.exec(prefix)![0].replace(/\t/g, '   ').length;
-  container.style.setProperty('--list-indent', `calc(1.5em + ${indent}ch)`);
+  container.style.setProperty('--list-indent', hangingIndent({ prefix: /^[ \t]*/.exec(prefix)![0], widget: true }));
 }
 
 function editMediaSource(container: HTMLElement, view: EditorView) {
@@ -232,6 +232,11 @@ function mediaExtension(storage: StorageManager): Extension {
       const task = /^(\s*(?:[-+*]|\d+[.)])\s+)\[([ xX])\]\s+/.exec(line.text);
       const media = mediaLine(line.text);
       const active = activeLine(number);
+      const layout = !heading ? listLayout(line.text) : null;
+      if (layout) {
+        decorations.push({ from: line.from, to: line.from, decoration: Decoration.line({ class: 'cm-hanging-list', attributes: { style: `--list-wrap-indent: ${hangingIndent(layout)}` } }) });
+        if (!media || active) for (let index = 0; index < layout.prefix.length; index++) if (layout.prefix[index] === '\t') decorations.push({ from: line.from + index, to: line.from + index + 1, decoration: Decoration.replace({ widget: new ListTabWidget(layout.prefix, index) }) });
+      }
       if (task) {
         const indent = /^\s*/.exec(line.text)![0].length;
         const position = line.from + task[1].length + 1;
@@ -379,7 +384,7 @@ export function createEditor(options: EditorOptions): { view: EditorView; destro
       extensions: [
         ...(options.readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false), EditorState.transactionFilter.of(transaction => transaction.docChanged ? [] : transaction)] : []),
         autocompletion({ override: [tagCompletion(options.tags)], activateOnTypingDelay: 75, defaultKeymap: false, icons: false, tooltipClass: () => 'tag-suggestions' }),
-        completionScrollbar,
+        completionScrollbar, listPrefixMeasurements,
         Prec.highest(keymap.of(completionKeymap)),
         EditorState.phrases.of({ Completions: 'タグの候補' }),
         history(), markdown(), syntaxHighlighting(highlighting), EditorView.lineWrapping, drawSelection(), dropCursor(),
