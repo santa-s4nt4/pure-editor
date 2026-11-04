@@ -108,3 +108,5 @@ npm run test:e2e
 
 技術仕様の参照：[Tauri FS](https://v2.tauri.app/plugin/file-system/)、[Persisted Scope](https://v2.tauri.app/plugin/persisted-scope/)、[CodeMirror Decorations](https://codemirror.net/examples/decoration/)、[R2 S3 API](https://developers.cloudflare.com/r2/api/s3/api/)。
 # pure-editor
+
+記事を GitHub 経由で poin7s.com に公開するには、[GitHub 公開の設定](docs/github-publishing.md)を参照してください。すべての記事は初期状態で非公開です。

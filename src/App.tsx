@@ -16,6 +16,7 @@ import { createPaperClient } from './lib/paper-native';
 import type { PaperClient, PaperFile } from './lib/paper-client';
 import PaperSettings from './components/PaperSettings';
 import AnimatedWordmark from './components/AnimatedWordmark';
+import { ArticlePublisher, GitHubRepository, loadGithubToken, saveGithubToken, targetKey, validatePublishingTarget } from './lib/github-publisher';
 
 type PaletteAction = { id: string; label: string; detail: string; kind: 'note' | 'action'; run(): void | Promise<void> };
 const introduction = '# 余白から、はじめる。\n\n考えていることを、ひとつずつ。\n言葉にすると、少しだけ輪郭が見えてくる。\n\npure は、書くための静かな場所です。\n\n⌘ L でノートを探す。⌘ N で新しく書く。\n[思いついたこと] のように囲めば、タグになります。\n同じタグの文章を、まとめて見返せます。\n\n画像を置く。動画の URL を貼る。\n書いたものは、ふつうの Markdown として残ります。\n';
@@ -29,6 +30,13 @@ export default function App() {
   let paperFileInput!: HTMLInputElement;
   let pendingPaperFile: File | undefined;
   const [ready, setReady] = createSignal(false);
+  const [visibilityFilter, setVisibilityFilter] = createSignal<'all' | 'public' | 'private'>('all');
+  const [githubToken, setGithubToken] = createSignal('');
+  const [tokenDraft, setTokenDraft] = createSignal('');
+  const [publishStatus, setPublishStatus] = createSignal('GitHub は未接続です');
+  let publisher: ArticlePublisher | undefined;
+  let publishTimer: ReturnType<typeof setTimeout> | undefined;
+  let publishingPaused = false;
   const [notes, setNotes] = createSignal<Note[]>([]);
   const [activePath, setActivePath] = createSignal('');
   const [home, setHome] = createSignal(true);
@@ -119,13 +127,41 @@ export default function App() {
     unlistenStorage?.();
     storage = manager;
     unlistenStorage = storage.onChange(event => {
-      if (event.type === 'files') void reloadNotes().catch(error => report(String(error)));
+      if (event.type === 'files') {
+        void reloadNotes().catch(error => report(String(error)));
+        clearTimeout(publishTimer);
+        if (publisher) setPublishStatus('公開同期を待っています');
+        if (ready() && !publishingPaused) publishTimer = setTimeout(() => { void syncPublished().catch(() => undefined); }, 1500);
+      }
       else {
         setSyncStatus({ idle: '同期済み', syncing: '同期しています', offline: '接続が戻ると再同期します', error: '同期を完了できませんでした' }[event.state]);
         if (event.message) report(`${event.message} ローカルの文章は保存されています。`);
         if (event.state === 'idle') void reloadActiveAfterSync();
       }
     });
+  }
+  function connectPublisher() {
+    const current = settings();
+    publisher = native && githubToken() && current?.githubRepository ? new ArticlePublisher(new GitHubRepository(current.githubRepository, current.githubBranch || 'main', githubToken())) : undefined;
+    setPublishStatus(publisher ? '公開同期を待っています' : 'GitHub は未接続です');
+  }
+  async function syncPublished() {
+    const current = publisher;
+    if (!current) return;
+    setPublishStatus('公開先を更新しています');
+    try { await current.sync(storage); if (current === publisher) setPublishStatus('公開先は最新です'); }
+    catch (error) { if (current === publisher) setPublishStatus(`公開先の更新待ち：${error instanceof Error ? error.message : String(error)}`); throw error; }
+  }
+  async function changePublication(path: string, visibility: 'public' | 'private') {
+    if (!publisher) { showSettings(); report('GitHub 公開の接続情報を設定してください。'); return; }
+    await flush(); path = storage.resolvePath(path);
+    const previous = (await storage.listNotes()).find(note => note.path === path)?.publication;
+    if (previous && targetKey(previous.repository, previous.branch) !== targetKey(publisher.remote.repository, publisher.remote.branch)) throw new Error(`この記事の公開先は ${previous.repository}（${previous.branch}）です。設定を元の公開先に戻してから操作してください。`);
+    const intent = await publisher.intent(storage, path, visibility);
+    await storage.setPublication(path, intent);
+    await reloadNotes();
+    await syncPublished();
+    report(visibility === 'public' ? 'poin7s.com の公開用リポジトリに保存しました。' : '公開用リポジトリから取り下げました。過去の Git 履歴は残ります。');
   }
   async function reloadActiveAfterSync() {
     if (!editor || dirty || !activePath()) return;
@@ -268,6 +304,11 @@ export default function App() {
     setBusy(true);
     try {
       await flush(); path = storage.resolvePath(path);
+      const publication = (await storage.listNotes()).find(note => note.path === path)?.publication;
+      if (publication) {
+        if (!publisher) throw new Error('公開済み記事は、GitHub に接続して取り下げてから削除してください。');
+        await changePublication(path, 'private');
+      }
       const fromHome = home(); const backup = await storage.deleteNote(path);
       localStorage.removeItem(journalKey(path)); setDeleted({ path, backup, fromHome }); setSwipedRow(null);
       if (!fromHome && activePath() === path) await goHome();
@@ -373,7 +414,7 @@ export default function App() {
     if (!home()) editor?.view.focus();
   }
   function showSettings() {
-    setDraft({ ...settings()! }); setSettingsError(''); setScreen('settings');
+    setDraft({ ...settings()! }); setTokenDraft(githubToken()); setSettingsError(''); setScreen('settings');
   }
   const filtered = createMemo(() => {
     const value = query().trim().toLocaleLowerCase();
@@ -383,9 +424,10 @@ export default function App() {
   });
   const homeNotes = createMemo(() => {
     const value = homeQuery().trim().toLocaleLowerCase();
-    return notes().filter(note => (!homeTag() || note.tags.includes(homeTag())) && `${note.title} ${note.tags.join(' ')}`.toLocaleLowerCase().includes(value));
+    return notes().filter(note => (visibilityFilter() === 'all' || (note.publication?.visibility ?? 'private') === visibilityFilter()) && (!homeTag() || note.tags.includes(homeTag())) && `${note.title} ${note.tags.join(' ')}`.toLocaleLowerCase().includes(value));
   });
   const actions = createMemo<PaletteAction[]>(() => {
+    publishStatus();
     const value = query().trim();
     const result: PaletteAction[] = filtered().map(note => ({ id: note.path, label: note.title, detail: note.tags.join('  ') || note.excerpt || 'まだ、まっさらなノート', kind: 'note', run: () => openNote(note.path) }));
     const title = value && !value.startsWith('#') ? value : '';
@@ -401,6 +443,11 @@ export default function App() {
       if (/^\/.+\.paper$/i.test(value)) result.unshift({ id: 'paper-path', label: `Paper「${value}」を開く`, detail: 'Dropbox の同じ文書を編集', kind: 'action', run: () => openPaper(value) });
       for (const file of paperMatches()) result.unshift({ id: `paper-${file.id}`, label: file.path_display ?? file.name, detail: 'この Paper を開く', kind: 'action', run: () => openPaper(file.id, pendingPaperFile) });
     }
+    if (!home() && !isPaperPath(activePath())) {
+      const isPublic = notes().find(note => note.path === activePath())?.publication?.visibility === 'public';
+      result.push({ id: 'publication', label: isPublic ? 'この記事を非公開にする' : 'この記事を公開する', detail: isPublic ? `${publishStatus()} · 取り下げ後も Git 履歴は残ります` : '本文・タグ・参照画像を公開リポジトリへ送る', kind: 'action', run: () => changePublication(activePath(), isPublic ? 'private' : 'public') });
+    }
+    if (publisher) result.push({ id: 'publish-sync', label: '公開先を同期する', detail: publishStatus(), kind: 'action', run: async () => { await flush(); await syncPublished(); } });
     if (native) result.push({ id: 'paper-open', label: 'Paper ファイルを開く', detail: '⌘ O · 元の名前を維持して Dropbox と連携', kind: 'action', run: () => paperFileInput.click() });
     if (isPaperPath(activePath())) result.push({ id: 'paper-recover', label: 'Paper を読み直す', detail: 'ローカルにバックアップを残して Dropbox の内容を読み直す', kind: 'action', run: recoverPaper });
     if (!home() || homeTag()) result.push({ id: 'home', label: 'すべての記事', detail: '更新の新しい順に並べる', kind: 'action', run: () => goHome() });
@@ -428,6 +475,10 @@ export default function App() {
     setBusy(true); setSettingsError('');
     try {
       if (next.syncEnabled) validateR2(next);
+      if (next.githubRepository) validatePublishingTarget(next.githubRepository, next.githubBranch || 'main');
+      publishingPaused = true; clearTimeout(publishTimer);
+      await publisher?.wait().catch(() => undefined);
+      await saveGithubToken(tokenDraft().trim()); setGithubToken(tokenDraft().trim());
       await flush();
       await storage.waitForSync();
       if (next.folder !== settings()?.folder || next.imagesFolder !== settings()?.imagesFolder) {
@@ -446,15 +497,17 @@ export default function App() {
         setSyncStatus(next.syncEnabled ? '同期を待っています' : '同期はオフです');
         closePalette();
       }
+      connectPublisher();
       if (next.syncEnabled) void storage.sync();
+      void syncPublished().catch(() => undefined);
       report('設定を保存しました。');
     } catch (error) { setSettingsError(error instanceof Error ? error.message : String(error)); }
-    finally { setBusy(false); }
+    finally { publishingPaused = false; setBusy(false); }
   }
   function updateDraft(key: keyof Settings, value: string | boolean) { setDraft(previous => previous ? { ...previous, [key]: value } : null); }
   async function refreshFromDisk() {
     if (!ready() || busy()) return;
-    try { await flush(); await storage.refresh(); await storage.sync(); await paperNotebook?.refresh(); await reloadActiveAfterSync(); }
+    try { await flush(); await storage.refresh(); await storage.sync(); await paperNotebook?.refresh(); await reloadActiveAfterSync(); await syncPublished(); }
     catch (error) { report(String(error)); }
   }
   function scrollOutline(event: WheelEvent) {
@@ -499,7 +552,9 @@ export default function App() {
           await manager.saveNamedNote(path, introduction);
           await reloadNotes();
         }
+        try { setGithubToken(await loadGithubToken()); connectPublisher(); } catch (error) { setPublishStatus(String(error)); }
         setReady(true);
+        void syncPublished().catch(() => undefined);
         if (paperConnected()) void paperNotebook?.refresh().then(() => reloadActiveAfterSync()).catch(error => report(String(error)));
         document.title = 'pure';
         if (native && !mobile) {
@@ -663,14 +718,14 @@ export default function App() {
     window.addEventListener('pagehide', pagehide);
     window.addEventListener('online', online);
     window.addEventListener('focus', online);
-    const retry = setInterval(() => { if (ready() && document.visibilityState === 'visible' && navigator.onLine) { void storage.sync(); void paperNotebook?.sync(); } }, 60_000);
+    const retry = setInterval(() => { if (ready() && document.visibilityState === 'visible' && navigator.onLine) { void storage.sync(); void paperNotebook?.sync(); void syncPublished().catch(() => undefined); } }, 60_000);
     onCleanup(() => {
       disposed = true; clearTimeout(hintTimer); clearTimeout(clickTimer); clearTimeout(timer); clearTimeout(toastTimer); clearInterval(retry);
       paper.removeEventListener('touchstart', touchstart, true); paper.removeEventListener('touchmove', touchmove, true); paper.removeEventListener('touchend', touchend, true); paper.removeEventListener('touchcancel', cancelTouch, true); paper.removeEventListener('click', click, true);
       paper.removeEventListener('wheel', wheel, true); paper.removeEventListener('drop', paperDrop, true); paper.removeEventListener('dragover', paperDrag);
       window.removeEventListener('keydown', keydown, true); document.removeEventListener('visibilitychange', visibility);
       window.removeEventListener('pagehide', pagehide); window.removeEventListener('online', online); window.removeEventListener('focus', online);
-      removeHomeScrollbar(); unlistenStorage?.(); unlistenClose?.(); unlistenScale?.(); unlistenTrackpad?.(); clearOutline?.(); editor?.destroy();
+      clearTimeout(publishTimer); removeHomeScrollbar(); unlistenStorage?.(); unlistenClose?.(); unlistenScale?.(); unlistenTrackpad?.(); clearOutline?.(); editor?.destroy();
     });
   });
 
@@ -681,9 +736,10 @@ export default function App() {
       <div class="home-scroll" ref={homeScroller}>
         <header class="home-heading"><h1><Show when={!homeTag()} fallback={homeTag()}><AnimatedWordmark active={home() && !palette()} /></Show></h1></header>
         <div class="home-search"><input type="search" aria-label="記事を探す" placeholder="タイトル、タグで探す" value={homeQuery()} onInput={event => setHomeQuery(event.currentTarget.value)} /><Show when={homeQuery()}><button type="button" onClick={() => setHomeQuery('')}>すべて</button></Show></div>
+        <div class="publication-filters" role="group" aria-label="記事の公開範囲"><For each={[{ value: 'all' as const, label: 'すべて' }, { value: 'private' as const, label: '非公開' }, { value: 'public' as const, label: '公開' }]}>{filter => <button type="button" aria-pressed={visibilityFilter() === filter.value} onClick={() => setVisibilityFilter(filter.value)}>{filter.label}</button>}</For></div>
         <div class="note-grid"><For each={homeNotes()}>{note => <article class="note-card" data-note-path={note.path} classList={{ 'is-swiping': swipedRow()?.path === note.path && swipedRow()!.dragging, 'is-revealed': swipedRow()?.path === note.path && swipedRow()!.offset < 0, 'is-delete-ready': swipedRow()?.path === note.path && swipedRow()!.full }} style={{ '--row-offset': `${swipedRow()?.path === note.path ? swipedRow()!.offset : 0}px` }}>
           <Show when={mobile && !isPaperPath(note.path)}><button class="note-delete" type="button" aria-label={`${note.title}を削除`} tabindex={swipedRow()?.path === note.path ? 0 : -1} disabled={busy()} onClick={() => void deleteArticle(note.path)}>削除</button></Show>
-          <div class="note-card-content"><button class="note-title" type="button" disabled={!ready() || busy()} onClick={event => activateNote(event, note.path)} onDblClick={() => { if (!mobile) { clearTimeout(clickTimer); void openArticleWindow(note.path); } }}>{note.title}</button><div class="note-tags"><For each={note.tags.slice(0, 3)}>{tag => <button type="button" onClick={() => void followReference({ kind: 'tag', value: tag, from: 0, to: 0 })}>{tag}</button>}</For><Show when={note.tags.length > 3}><span class="tags-more" title={note.tags.slice(3).join('、')}>…</span></Show></div></div>
+          <div class="note-card-content"><button class="note-title" type="button" disabled={!ready() || busy()} onClick={event => activateNote(event, note.path)} onDblClick={() => { if (!mobile) { clearTimeout(clickTimer); void openArticleWindow(note.path); } }}>{note.title}</button><div class="note-tags"><Show when={note.publication?.visibility === 'public'}><span class="publication-label" title={publishStatus()}>{publishStatus() === '公開先は最新です' && note.publication?.repository.toLowerCase() === settings()?.githubRepository?.toLowerCase() && note.publication?.branch === (settings()?.githubBranch || 'main') ? '公開' : '公開設定あり'}</span></Show><Show when={note.publication?.visibility === 'private' && publishStatus() !== '公開先は最新です'}><span class="publication-label" title={publishStatus()}>取り下げ設定あり</span></Show><For each={note.tags.slice(0, 3)}>{tag => <button type="button" onClick={() => void followReference({ kind: 'tag', value: tag, from: 0, to: 0 })}>{tag}</button>}</For><Show when={note.tags.length > 3}><span class="tags-more" title={note.tags.slice(3).join('、')}>…</span></Show></div></div>
         </article>}</For></div>
         <Show when={ready() && homeNotes().length === 0}><p class="home-empty">{homeQuery() ? '見つかりませんでした。' : 'まだ、何も書かれていません。'}</p></Show>
       </div>
@@ -725,6 +781,13 @@ export default function App() {
               <p class="setting-description">{syncStatus()}。アクセスキーは端末のキーチェーンに保存します。</p>
               <button class="text-button" type="button" onClick={() => void run({ id: 'sync', label: '', detail: '', kind: 'action', run: async () => { await flush(); await storage.sync(); } })}>今すぐ同期</button>
             </div></Show>
+          </fieldset>
+          <fieldset disabled={busy() || !native}><legend>GitHub に公開</legend>
+            <p class="setting-description">すべての記事は初期状態で非公開です。記事の ⋯ または ⌘ L から公開を選ぶと、本文・タグ・参照画像を poin7s.com に公開します。取り下げ後も Git の過去履歴は残ります。</p>
+            <label>記事専用リポジトリ<input placeholder="santa-s4nt4/pure-notes" value={draft()?.githubRepository ?? ''} onInput={event => updateDraft('githubRepository', event.currentTarget.value.trim())} spellcheck={false} autocapitalize="off" /></label>
+            <label>ブランチ<input placeholder="main" value={draft()?.githubBranch ?? 'main'} onInput={event => updateDraft('githubBranch', event.currentTarget.value.trim())} spellcheck={false} autocapitalize="off" /></label>
+            <label>GitHub トークン<input type="password" value={tokenDraft()} onInput={event => setTokenDraft(event.currentTarget.value)} autocomplete="off" spellcheck={false} autocapitalize="off" /></label>
+            <p class="setting-description">{publishStatus()}。トークンはこの端末のキーチェーンだけに保存します。Paper 文書は公開の対象になりません。</p>
           </fieldset>
           <Show when={native}><PaperSettings client={paperClient()} connected={paperConnected()} status={paperStatus()} onConnected={paperConnectionChanged} /></Show>
           <p class="settings-error" role="alert">{settingsError()}</p>

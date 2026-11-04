@@ -202,3 +202,9 @@ button:disabled { cursor: wait; opacity: 0.5; }
   .note-card.is-revealed .note-delete { visibility: visible; }
   .note-card.is-delete-ready .note-delete { background: light-dark(#a73e39, #8d3e39); }
 }
+
+/* Publication controls stay secondary to the writing. */
+.publication-filters { display: flex; gap: 1.4em; margin: -1.2em 0 2.6em; font-size: .78em; }
+.publication-filters button { border: 0; padding: .3em 0; background: none; color: var(--text-faint); cursor: pointer; font: inherit; }
+.publication-filters button[aria-pressed="true"] { color: var(--text-ink); box-shadow: 0 1px currentColor; }
+.publication-label { font-size: .8em; opacity: .7; white-space: nowrap; }
