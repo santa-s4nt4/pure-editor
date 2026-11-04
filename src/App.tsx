@@ -3,7 +3,7 @@ import { openUrl } from '@tauri-apps/plugin-opener';
 import { invoke } from '@tauri-apps/api/core';
 import { EditorView } from '@codemirror/view';
 import { createEditor } from './lib/editor';
-import { isExternalUrl, noteTitle, pagePath, type Reference } from './lib/transformer';
+import { isExternalUrl, noteTitle, pagePath, toMarkdown, type Reference } from './lib/transformer';
 import { StorageManager, R2Backend, chooseFolder, createBackend, loadSettings, persistSettings, persistLastFile, relocateImages, safeRelativePath, validateR2, mobile, native, type Note, type Settings } from './lib/storage';
 import { workspaceChannel, workspaceLock } from './lib/workspace';
 import { scrollIndicator } from './lib/scrollbar';
@@ -147,7 +147,7 @@ export default function App(props: { initialArticle?: string } = {}) {
       else {
         setSyncStatus({ idle: '同期済み', syncing: '同期しています', offline: '接続が戻ると再同期します', error: '同期を完了できませんでした' }[event.state]);
         if (event.message) report(`${event.message} ローカルの文章は保存されています。`);
-        if (event.state === 'idle') void reloadActiveAfterSync();
+        if (event.state === 'idle') void (async () => { if (ready()) await storage.migrateMarkdownLayout(); await reloadActiveAfterSync(); })().catch(error => report(String(error)));
       }
     });
   }
@@ -201,7 +201,7 @@ export default function App(props: { initialArticle?: string } = {}) {
       updateTitle(content ?? current.view.state.doc.toString());
     }
     if (content === null && current === editor && !dirty) { await goHome(); return; }
-    if (content !== null && current === editor && !dirty && current.view.state.doc.toString() !== content) {
+    if (content !== null && current === editor && !dirty && current.view.state.doc.toString() !== content && toMarkdown(current.view.state.doc.toString()) !== toMarkdown(content)) {
       const head = Math.min(current.view.state.selection.main.head, content.length);
       refreshing = true;
       current.view.dispatch({ changes: { from: 0, to: current.view.state.doc.length, insert: content }, selection: { anchor: head } });
@@ -527,6 +527,8 @@ export default function App(props: { initialArticle?: string } = {}) {
         await relocateImages(settings()!, next);
         const manager = new StorageManager(await createBackend(next), native && next.syncEnabled ? new R2Backend(next) : null);
         await manager.initialize(); await bindPaper(manager);
+        if (native && next.syncEnabled) await manager.sync();
+        await manager.migrateNoteNames(); await manager.migrateMarkdownLayout();
         await persistSettings(next);
         clearOutline?.(); clearOutline = undefined; editor?.destroy(); editor = undefined; dirty = false;
         setSettings(next); bindStorage(manager);
@@ -604,6 +606,7 @@ export default function App(props: { initialArticle?: string } = {}) {
         await bindPaper(manager);
         if (native && currentSettings.syncEnabled) { manager.setRemote(new R2Backend(currentSettings)); await manager.sync(); }
         await manager.migrateNoteNames();
+        await manager.migrateMarkdownLayout();
         for (const [from, to] of Object.entries(manager.renamedPaths)) {
           const oldKey = journalKey(from); const newKey = journalKey(to);
           const recovered = localStorage.getItem(oldKey);
