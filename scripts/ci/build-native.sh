@@ -12,8 +12,8 @@ if [[ "$PURE_BUILD_PLATFORM" == 'macos' ]]; then
   APP_PATH=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/macos -maxdepth 1 -type d -name '*.app' -print -quit)
   test -n "$APP_PATH"
   APP_EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_PATH/Contents/Info.plist")
-  lipo -verify_arch arm64 "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE"
-  lipo -archs "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE"
+  lipo "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE" -verify_arch arm64
+  lipo "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE" -archs
   codesign --force --deep --sign - "$APP_PATH"
   ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" pure-macos.zip
 else

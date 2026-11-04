@@ -39,6 +39,7 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
           shared-key: ${{ inputs.runner }}-${{ inputs.platform }}
+          cache-on-failure: true
       - run: npm ci
       - uses: actions/download-artifact@v4
         with:
