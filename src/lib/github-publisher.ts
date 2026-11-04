@@ -30,7 +30,7 @@ export function parsePublicIndex(text: string): PublicIndex {
     if (!/^[a-f0-9]{32}$/.test(id) || !validRevision(state?.revision) || !['public', 'private'].includes(state?.visibility)) throw new Error('公開設定の履歴が不正です。');
   }
   for (const post of index.articles) {
-    if (!/^[a-f0-9]{32}$/.test(post.id) || ids.has(post.id) || typeof post.title !== 'string' || !Array.isArray(post.tags) || post.tags.some(tag => typeof tag !== 'string') || typeof post.excerpt !== 'string' || !Number.isFinite(post.updatedAt) || !/^posts\/[^/\\]+\.md$/.test(post.markdownPath) || post.markdownPath.includes('..') || !Array.isArray(post.assets) || post.assets.some(path => !/^assets\/[a-f0-9]{64}\.webp$/.test(path)) || !/^[a-f0-9]{64}$/.test(post.contentHash) || index.states[post.id]?.revision !== post.revision || index.states[post.id]?.visibility !== 'public') throw new Error('公開記事の一覧が不正です。');
+    if (!/^[a-f0-9]{32}$/.test(post.id) || ids.has(post.id) || typeof post.title !== 'string' || !Array.isArray(post.tags) || post.tags.some(tag => typeof tag !== 'string') || typeof post.excerpt !== 'string' || !Number.isFinite(post.updatedAt) || !/^posts\/[^/\\]+\.md$/.test(post.markdownPath) || !Array.isArray(post.assets) || post.assets.some(path => !/^assets\/[a-f0-9]{64}\.webp$/.test(path)) || !/^[a-f0-9]{64}$/.test(post.contentHash) || index.states[post.id]?.revision !== post.revision || index.states[post.id]?.visibility !== 'public') throw new Error('公開記事の一覧が不正です。');
     ids.add(post.id);
   }
   return index;

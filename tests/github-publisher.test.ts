@@ -55,6 +55,15 @@ describe('GitHub 記事公開', () => {
     expect(remote.index.articles[0].id).toBe(noteId(path)); expect(remote.index.articles[0].title).toBe('変更したタイトル');
     expect(remote.index.articles[0].markdownPath).toContain(renamed); expect(remote.files.has(old)).toBe(false);
   });
+  it('タイトル中の連続したピリオドも通常のファイル名として公開・取り下げできる', async () => {
+    const { storage, remote, publisher, path } = await setup();
+    const renamed = await storage.saveNamedNote(path, '# foo..bar');
+    await storage.setPublication(renamed, await publisher.intent(storage, renamed, 'public')); await publisher.sync(storage);
+    expect(remote.index.articles[0].markdownPath).toContain('foo..bar');
+    expect(() => parsePublicIndex(JSON.stringify(remote.index))).not.toThrow();
+    await storage.setPublication(renamed, await publisher.intent(storage, renamed, 'private')); await publisher.sync(storage);
+    expect(remote.index.articles).toHaveLength(0);
+  });
   it('取り下げた記事の本文・タイトルと未使用画像を現在の公開データから消す', async () => {
     const { storage, remote, path, visibility } = await setup(); const image = await storage.saveImage(new Uint8Array([1]));
     await storage.saveNote(path, `# 公開する記事\n![image](${image})`); await visibility('public'); await visibility('private');
