@@ -13,7 +13,7 @@ About ページは pure でタイトルを `About` にして公開した記事�
 2. Resource owner を `santa-s4nt4` にします。名前は `pure-publishing` など。期限は運用に合わせて選び、期限切れ前に更新してください。
 3. Repository access は **Only select repositories**、対象は **pure-notes だけ**にします。
 4. Repository permissions の **Contents を Read and write** にします。Metadata の読み取りは自動で付きます。他の権限は不要です。
-5. トークンを発行し、pure の設定（Mac は `⌘ ,`、iPhone は `⋯` →「設定」）を開きます。
+5. トークンを発行し、pure の設定（Mac は `⌘ ,`、iPhone は `⋯` の上部にある「設定」）を開きます。
 6. 「GitHub に公開」に、リポジトリ `santa-s4nt4/pure-notes`、ブランチ `main`、発行したトークンを入力し「設定を保存」を押します。
 
 トークンは端末ごとのキーチェーンに保存します。Markdown、R2、GitHub、サイトの JavaScript、設定 JSON には保存しません。Mac と iPhone ではそれぞれ設定してください。ブラウザの開発プレビューでは GitHub 公開を利用できません。
@@ -27,7 +27,7 @@ About ページは pure でタイトルを `About` にして公開した記事�
 
 - `[art work]` / `[client work]` がある記事: poin7s.com の **Works**。
 - それ以外の記事: **Memorandum**。タグを付けなくても表示します。
-- `[tag]`、見出し、箇条書き、チェックリスト、画像、YouTube・Vimeo を表示できます。
+- `[tag]`、見出し、箇条書き、チェックリスト、画像、YouTube・Vimeo を表示できます。リンクは `[URL 表示名]`・`[表示名 URL]` のどちらでも書けます。
 - 記事の URL は `https://poin7s.com/viewer.html?post=<記事ID>`。タイトルを変更しても URL は変わりません。
 - トップ画面の「すべて / 非公開 / 公開」で公開設定を絞り込めます。
 

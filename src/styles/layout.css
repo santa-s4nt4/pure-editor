@@ -200,8 +200,9 @@ button:disabled { cursor: wait; opacity: 0.5; }
 @media (prefers-reduced-motion: reduce) { .history-swipe { transition: none; } }
 
 .palette-top-actions { display: flex; align-items: center; gap: 1em; flex: 0 0 auto; }
-.palette-top-actions .palette-home { white-space: nowrap; font-size: .85em; }
+.palette-top-actions :is(.palette-home, .palette-settings) { white-space: nowrap; font-size: .85em; }
 @media (pointer: coarse) {
+  .palette-top-actions { gap: .55em; }
   .palette-top-actions > button { min-inline-size: 2.75rem; min-block-size: 2.75rem; }
   .note-card { position: relative; overflow: hidden; border-radius: .2rem; }
   .note-card-content { position: relative; min-block-size: 3.5rem; padding-block: .4rem; background: var(--paper); transform: translate3d(var(--row-offset, 0px), 0, 0); transition: transform var(--motion-duration) var(--motion-easing); touch-action: pan-y pinch-zoom; }
@@ -235,3 +236,5 @@ button:disabled { cursor: wait; opacity: 0.5; }
 .palette:has(.article-actions) .palette-inner { display: flex; flex-direction: column; max-block-size: calc(100dvh - var(--palette-position) - 2rem); }
 .palette:has(.article-actions) .palette-results { flex: 1 1 auto; min-block-size: 0; }
 .palette:has(.article-actions) :is(.palette-search, .article-actions, .palette-footer) { flex-shrink: 0; }
+
+.palette-settings { padding: 0; color: var(--text-muted); }

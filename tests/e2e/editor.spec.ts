@@ -540,20 +540,28 @@ test('iPhoneは画面端のスワイプで履歴を往復し、縦スクロー�
   await expect.poll(() => page.locator('.cm-scroller').evaluate(element => element.scrollTop)).toBeGreaterThan(0);
 });
 
-test('iPhoneのホーム操作は⋯の右上にあり、設定画面からも戻れる', async ({ page, isMobile }) => {
+test('iPhoneの⋯からtopと設定をすぐ開ける', async ({ page, isMobile }) => {
   test.skip(!isMobile, 'iPhone のメニュー');
   await newNote(page, isMobile, 'ホームの位置');
   await palette(page, isMobile);
   const dialog = page.getByRole('dialog'); const home = dialog.getByRole('button', { name: 'トップページに戻る', exact: true });
+  await expect(home).toHaveText('top');
+  const settings = dialog.getByRole('button', { name: '設定を開く', exact: true });
+  await expect(settings).toBeVisible();
   const bounds = await dialog.boundingBox(); const button = await home.boundingBox();
   expect(button!.x).toBeGreaterThan(bounds!.x + bounds!.width / 2);
   expect(button!.y).toBeLessThan(bounds!.y + 90);
   await expect(dialog.locator('.palette-footer .palette-home')).toHaveCount(0);
   await home.tap(); await expect(page.getByRole('region', { name: '記事一覧' })).toBeVisible();
   await page.getByRole('button', { name: 'ホームの位置', exact: true }).tap();
-  await palette(page, isMobile); await dialog.getByRole('option', { name: /設定 保存する場所/ }).click();
+  await palette(page, isMobile); await settings.tap();
+  await expect(dialog.getByRole('radiogroup', { name: '外観' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'トップページに戻る', exact: true })).toHaveText('top');
   await dialog.getByRole('button', { name: 'トップページに戻る', exact: true }).tap();
   await expect(page.getByRole('region', { name: '記事一覧' })).toBeVisible(); await expect(dialog).not.toBeVisible();
+  await palette(page, isMobile); await settings.tap();
+  await expect(dialog.getByRole('radiogroup', { name: '外観' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'トップページに戻る', exact: true })).toHaveCount(0);
 });
 
 test('iPhoneのトップで左スワイプ削除と取り消しができ、トップに留まる', async ({ page, isMobile }) => {
@@ -589,4 +597,28 @@ test('iPhoneの深いスワイプは削除し、キャンセルや縦の動き�
   await fingerSwipe(page, { x: current!.x + current!.width - 20, y: current!.y + current!.height / 2 }, { x: current!.x + 10, y: current!.y + current!.height / 2 });
   await expect(page.getByRole('button', { name: '深いスワイプ', exact: true })).toHaveCount(0);
   await expect(page).toHaveTitle('pure');
+});
+
+
+test('表示名とURLをどちらの順で書いてもリンクを開き、保存後もリンクとして表示する', async ({ page, context, isMobile }) => {
+  await context.route('https://example.com/**', route => route.fulfill({ contentType: 'text/html', body: '<p>external link</p>' }));
+  await newNote(page, isMobile, 'リンクの順序');
+  const editor = page.getByRole('textbox', { name: 'ノート本文' });
+  await editor.fill('# リンクの順序\n\n[https://example.com/first 先にURL]\n[後ろにURL https://example.com/second]\n[通常タグ]\n最後の行');
+  await editor.press('Meta+ArrowDown');
+  await expect(page.locator('.cm-scrapbox-link')).toHaveText(['先にURL', '後ろにURL']);
+  await expect(page.locator('.cm-hashtag')).toHaveText('通常タグ');
+  const opened = page.waitForEvent('popup'); await page.locator('.cm-scrapbox-link').filter({ hasText: '後ろにURL' }).click();
+  const external = await opened; await expect(external).toHaveURL('https://example.com/second'); await external.close();
+  await editor.focus(); await editor.press('Meta+ArrowDown'); await editor.press('ArrowUp'); await editor.press('ArrowUp');
+  await expect(editor).toContainText('[後ろにURL https://example.com/second]');
+  await editor.press('Meta+ArrowDown'); await editor.press('Meta+s');
+  await expect.poll(() => page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase>(resolve => { const request = indexedDB.open('pure-notes', 1); request.onsuccess = () => resolve(request.result); });
+    const rows = await new Promise<{ bytes: Uint8Array }[]>(resolve => { const request = db.transaction('files').objectStore('files').getAll(); request.onsuccess = () => resolve(request.result); });
+    db.close(); return rows.some(row => new TextDecoder().decode(row.bytes).includes('[後ろにURL](https://example.com/second)'));
+  })).toBe(true);
+  await page.reload(); await page.getByRole('button', { name: 'リンクの順序', exact: true }).click();
+  await expect(page.locator('.cm-scrapbox-link')).toHaveText(['先にURL', '後ろにURL']);
+  await expect(page.locator('.cm-hashtag')).toHaveText('通常タグ');
 });
