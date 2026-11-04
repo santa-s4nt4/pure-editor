@@ -33,6 +33,7 @@ export default function App() {
   const [visibilityFilter, setVisibilityFilter] = createSignal<'all' | 'public' | 'private'>('all');
   const [githubToken, setGithubToken] = createSignal('');
   const [tokenDraft, setTokenDraft] = createSignal('');
+  const [articleMenuError, setArticleMenuError] = createSignal('');
   const [publishStatus, setPublishStatus] = createSignal('GitHub は未接続です');
   let publisher: ArticlePublisher | undefined;
   let publishTimer: ReturnType<typeof setTimeout> | undefined;
@@ -40,6 +41,8 @@ export default function App() {
   const [notes, setNotes] = createSignal<Note[]>([]);
   const [activePath, setActivePath] = createSignal('');
   const [home, setHome] = createSignal(true);
+  const currentArticle = createMemo(() => notes().find(note => note.path === activePath()));
+  const articleIsPublic = createMemo(() => currentArticle()?.publication?.visibility === 'public');
   const [homeQuery, setHomeQuery] = createSignal('');
   const [homeTag, setHomeTag] = createSignal('');
   const [activeTitle, setActiveTitle] = createSignal('');
@@ -162,6 +165,13 @@ export default function App() {
     await reloadNotes();
     await syncPublished();
     report(visibility === 'public' ? 'poin7s.com の公開用リポジトリに保存しました。' : '公開用リポジトリから取り下げました。過去の Git 履歴は残ります。');
+  }
+  async function toggleArticlePublication() {
+    if (busy() || home() || isPaperPath(activePath())) return;
+    setBusy(true); setArticleMenuError('');
+    try { await changePublication(activePath(), articleIsPublic() ? 'private' : 'public'); }
+    catch (error) { setArticleMenuError(error instanceof Error ? error.message : String(error)); }
+    finally { setBusy(false); }
   }
   async function reloadActiveAfterSync() {
     if (!editor || dirty || !activePath()) return;
@@ -314,7 +324,7 @@ export default function App() {
       if (!fromHome && activePath() === path) await goHome();
       else await reloadNotes();
       report('記事を削除しました。');
-    } catch (error) { setSwipedRow(null); report(String(error)); }
+    } catch (error) { setSwipedRow(null); setArticleMenuError(String(error)); report(String(error)); }
     finally { setBusy(false); }
   }
   async function deleteCurrent() {
@@ -405,7 +415,7 @@ export default function App() {
   function openPalette(value = '') {
     setSwipedRow(null);
     if (value !== pendingPaperFile?.name) setPaperMatches([]);
-    setScreen('notes'); setQuery(value); setSelected(0); setPalette(true);
+    setArticleMenuError(''); setScreen('notes'); setQuery(value); setSelected(0); setPalette(true);
     void reloadNotes().catch(error => report(String(error)));
   }
   function closePalette() {
@@ -753,7 +763,7 @@ export default function App() {
     </Show>
     <div class="history-swipe" classList={{ 'is-visible': !!swipeHint(), 'is-forward': swipeHint()?.side === 1, 'is-unavailable': !swipeHint()?.available }} style={{ '--swipe-progress': String(swipeHint()?.progress ?? 0) }} aria-hidden="true"><span>{swipeHint()?.side === 1 ? '›' : '‹'}</span></div>
     <Show when={startupError()}><div class="startup-message" role="alert"><p>ノートを開けませんでした。</p><p>{startupError()}</p><button type="button" onClick={() => location.reload()}>もう一度開く</button></div></Show>
-    <Show when={ready()}><button class="palette-trigger" type="button" aria-label="ノートを開く" title="ノートを開く（⌘ L）" onClick={() => openPalette()}><span aria-hidden="true">···</span></button></Show>
+    <Show when={ready()}><button class="palette-trigger" classList={{ 'is-native-desktop': native && !mobile }} type="button" aria-label="ノートを開く" title="記事の操作とノート（⌘ L）" onClick={() => openPalette()}><span aria-hidden="true">···</span></button></Show>
     <dialog class="palette" ref={dialog} aria-label={screen() === 'notes' ? 'ノートとコマンド' : '設定'} onCancel={event => { event.preventDefault(); if (!busy()) closePalette(); }} onClick={event => { if (event.target === dialog && !busy()) closePalette(); }}>
       <div class="palette-inner">
         <Show when={screen() === 'notes'} fallback={<form class="settings" onSubmit={saveSettings}>
@@ -773,7 +783,7 @@ export default function App() {
           <fieldset disabled={busy() || !native}><legend>端末間の同期</legend>
             <label class="checkbox-label"><input type="checkbox" checked={draft()?.syncEnabled ?? false} onChange={event => updateDraft('syncEnabled', event.currentTarget.checked)} />Cloudflare R2 を使う</label>
             <Show when={!native}><p class="setting-description">同期とフォルダの選択は、macOS・iOS アプリで利用できます。</p></Show>
-            <Show when={draft()?.syncEnabled}><div class="r2-fields">
+            <Show when={draft()?.syncEnabled}><div class="connection-fields r2-fields">
               <label>Endpoint URL<input type="url" required placeholder="https://account-id.r2.cloudflarestorage.com" value={draft()?.endpoint ?? ''} onInput={event => updateDraft('endpoint', event.currentTarget.value.trim())} spellcheck={false} autocapitalize="off" /></label>
               <label>Bucket Name<input required value={draft()?.bucket ?? ''} onInput={event => updateDraft('bucket', event.currentTarget.value.trim())} spellcheck={false} autocapitalize="off" /></label>
               <label>Access Key ID<input required value={draft()?.accessKeyId ?? ''} onInput={event => updateDraft('accessKeyId', event.currentTarget.value.trim())} autocomplete="off" spellcheck={false} autocapitalize="off" /></label>
@@ -784,9 +794,9 @@ export default function App() {
           </fieldset>
           <fieldset disabled={busy() || !native}><legend>GitHub に公開</legend>
             <p class="setting-description">すべての記事は初期状態で非公開です。記事の ⋯ または ⌘ L から公開を選ぶと、本文・タグ・参照画像を poin7s.com に公開します。取り下げ後も Git の過去履歴は残ります。</p>
-            <label>記事専用リポジトリ<input placeholder="santa-s4nt4/pure-notes" value={draft()?.githubRepository ?? ''} onInput={event => updateDraft('githubRepository', event.currentTarget.value.trim())} spellcheck={false} autocapitalize="off" /></label>
+            <div class="connection-fields github-fields"><label>記事専用リポジトリ<input placeholder="santa-s4nt4/pure-notes" value={draft()?.githubRepository ?? ''} onInput={event => updateDraft('githubRepository', event.currentTarget.value.trim())} spellcheck={false} autocapitalize="off" /></label>
             <label>ブランチ<input placeholder="main" value={draft()?.githubBranch ?? 'main'} onInput={event => updateDraft('githubBranch', event.currentTarget.value.trim())} spellcheck={false} autocapitalize="off" /></label>
-            <label>GitHub トークン<input type="password" value={tokenDraft()} onInput={event => setTokenDraft(event.currentTarget.value)} autocomplete="off" spellcheck={false} autocapitalize="off" /></label>
+            <label>GitHub トークン<input type="password" value={tokenDraft()} onInput={event => setTokenDraft(event.currentTarget.value)} autocomplete="off" spellcheck={false} autocapitalize="off" placeholder="Fine-grained personal access token" /></label></div>
             <p class="setting-description">{publishStatus()}。トークンはこの端末のキーチェーンだけに保存します。Paper 文書は公開の対象になりません。</p>
           </fieldset>
           <Show when={native}><PaperSettings client={paperClient()} connected={paperConnected()} status={paperStatus()} onConnected={paperConnectionChanged} /></Show>
@@ -798,6 +808,14 @@ export default function App() {
             if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); const length = actions().length; setSelected(index => (index + (event.key === 'ArrowDown' ? 1 : -1) + length) % length); }
             if (event.key === 'Enter') { event.preventDefault(); void run(actions()[selected()]); }
           }} /><div class="palette-top-actions"><button class="escape-key" type="button" aria-label="閉じる" onClick={closePalette}>{mobile ? '閉じる' : 'esc'}</button><Show when={mobile && (!home() || homeTag())}><button class="palette-home" type="button" disabled={busy()} aria-label="トップページに戻る" onClick={() => void goHome().catch(error => report(String(error)))}>ホーム</button></Show></div></div>
+          <Show when={!home() && !isPaperPath(activePath())}>
+            <section class="article-actions" aria-label="この記事の操作">
+              <div class="article-visibility"><span>公開範囲</span><div class="visibility-control"><span class="visibility-value">{articleIsPublic() ? '公開' : '非公開'}</span><button class="publication-switch" type="button" role="switch" aria-label="この記事を公開" aria-checked={articleIsPublic()} disabled={busy()} onClick={() => void toggleArticlePublication()}><span /></button></div></div>
+              <p class="article-publish-status">{currentArticle()?.publication ? publishStatus() : '公開すると、本文と参照画像が poin7s.com に表示されます。'}</p>
+              <div class="article-menu-buttons"><button class="article-delete" type="button" disabled={busy()} onClick={() => { setArticleMenuError(''); void deleteArticle(activePath()); }}>この記事を削除</button></div>
+              <Show when={articleMenuError()}><p class="settings-error" role="alert">{articleMenuError()}</p></Show>
+            </section>
+          </Show>
           <div class="palette-results" id="note-options" role="listbox" aria-label="ノートとコマンド" aria-busy={busy()}>
             <Show when={filtered().length === 0 && query()}><p class="empty-result">まだ、ここには何もありません。</p></Show>
             <For each={actions()}>{(action, index) => <button type="button" role="option" id={`option-${index()}`} aria-selected={selected() === index()} class="palette-option" classList={{ 'is-action': action.kind === 'action', 'is-current': action.id === activePath() }} disabled={busy()} onPointerMove={() => setSelected(index())} onClick={() => void run(action)}>

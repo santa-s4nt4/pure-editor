@@ -26,4 +26,50 @@ test('既存記事は非公開で、公開設定のある記事だけを絞り�
   if (isMobile) await page.getByRole('button', { name: 'ノートを開く', exact: true }).click();
   else await page.keyboard.press('Meta+l');
   await expect(page.getByRole('option', { name: /この記事を非公開にする/ })).toBeVisible();
+  await expect(page.getByRole('switch', { name: 'この記事を公開' })).toHaveAttribute('aria-checked', 'true');
+});
+
+test('⋯はMacの左上・iPhoneの右下にあり、記事の公開スイッチと削除を操作できる', async ({ page, isMobile }) => {
+  await page.goto('/'); await expect(page.locator('.writing-surface')).toHaveAttribute('aria-busy', 'false');
+  const trigger = page.getByRole('button', { name: 'ノートを開く', exact: true });
+  const bounds = await trigger.boundingBox();
+  if (isMobile) { const size = page.viewportSize()!; expect(size.width - bounds!.x - bounds!.width).toBeLessThanOrEqual(20); expect(size.height - bounds!.y - bounds!.height).toBeLessThanOrEqual(20); }
+  else { expect(bounds!.x).toBeLessThan(120); expect(bounds!.y).toBeLessThan(40); }
+  await trigger.click();
+  await expect(page.getByRole('switch', { name: 'この記事を公開' })).toHaveCount(0);
+  await page.getByRole('combobox').fill('メニューで操作'); await page.getByRole('combobox').press('Enter');
+  await expect(page).toHaveTitle('メニューで操作 — pure');
+  await trigger.click(); const visibility = page.getByRole('switch', { name: 'この記事を公開' });
+  await expect(visibility).toHaveAttribute('aria-checked', 'false');
+  await expect(page.getByRole('button', { name: 'この記事を削除', exact: true })).toBeVisible();
+  await visibility.click();
+  await expect(page.getByRole('group', { name: 'GitHub に公開', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '閉じる', exact: true }).click(); await trigger.click();
+  await expect(visibility).toHaveAttribute('aria-checked', 'false');
+  await page.getByRole('button', { name: 'この記事を削除', exact: true }).click();
+  await expect(page.getByRole('dialog')).not.toBeVisible();
+  await expect(page.getByRole('button', { name: 'メニューで操作', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '元に戻す', exact: true }).click();
+  await expect(page).toHaveTitle('メニューで操作 — pure');
+});
+
+test('GitHubの入力欄は縦に分かれ、ラベルと入力領域が重ならない', async ({ page, isMobile }) => {
+  await page.goto('/'); await expect(page.locator('.writing-surface')).toHaveAttribute('aria-busy', 'false');
+  if (isMobile) { await page.getByRole('button', { name: 'ノートを開く', exact: true }).click(); await page.getByRole('option', { name: /設定 保存する場所/ }).click(); }
+  else await page.keyboard.press('Meta+,');
+  const fields = page.locator('.github-fields');
+  await fields.scrollIntoViewIfNeeded();
+  const geometry = await fields.evaluate(element => {
+    return [...element.querySelectorAll('label')].map(label => {
+      const input = label.querySelector('input')!; const labelBox = label.getBoundingClientRect(); const inputBox = input.getBoundingClientRect();
+      return { labelTop: labelBox.top, inputTop: inputBox.top, bottom: labelBox.bottom, inputWidth: inputBox.width, labelWidth: labelBox.width, background: getComputedStyle(input).backgroundColor, fontSize: parseFloat(getComputedStyle(input).fontSize) };
+    });
+  });
+  expect(geometry).toHaveLength(3);
+  for (const [index, row] of geometry.entries()) {
+    expect(row.inputTop - row.labelTop).toBeGreaterThan(15); expect(row.inputWidth).toBeCloseTo(row.labelWidth, 0);
+    expect(row.inputWidth).toBeGreaterThan(250); expect(row.fontSize).toBeGreaterThanOrEqual(16); expect(row.background).not.toBe('rgba(0, 0, 0, 0)');
+    if (index) expect(row.labelTop).toBeGreaterThan(geometry[index - 1].bottom);
+  }
+  const overflow = await page.locator('.settings').evaluate(element => element.scrollWidth - element.clientWidth); expect(overflow).toBeLessThanOrEqual(1);
 });
