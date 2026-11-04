@@ -1,3 +1,4 @@
+mod github_auth;
 mod paper_auth;
 mod trackpad;
 const KEYCHAIN_SERVICE: &str = "jp.pure.editor.r2";
@@ -61,7 +62,7 @@ pub fn run() {
                 presentation::scale_changed(window, *scale_factor);
             }
         })
-        .invoke_handler(tauri::generate_handler![read_secret, write_secret, video::video_url, images::encode_webp, presentation::refresh_display, trackpad::double_click_interval, paper_auth::read_paper_auth, paper_auth::write_paper_auth])
+        .invoke_handler(tauri::generate_handler![read_secret, write_secret, github_auth::read_github_token, github_auth::write_github_token, video::video_url, images::encode_webp, presentation::refresh_display, trackpad::double_click_interval, paper_auth::read_paper_auth, paper_auth::write_paper_auth])
         .run(tauri::generate_context!())
         .expect("pure を起動できませんでした");
 }
