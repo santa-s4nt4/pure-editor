@@ -1,0 +1,65 @@
+name: Native package
+
+on:
+  workflow_call:
+    inputs:
+      platform:
+        type: string
+        required: true
+      runner:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ inputs.platform }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show actual build environment
+        run: |
+          uname -m
+          sw_vers
+          xcodebuild -version
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ inputs.platform == 'macos' && 'aarch64-apple-darwin' || 'aarch64-apple-ios' }}
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+          shared-key: ${{ inputs.runner }}-${{ inputs.platform }}
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend
+          path: dist/
+      - name: Verify frontend belongs to this commit
+        run: python3 scripts/ci/artifacts.py verify-frontend
+      - name: Compile and package requested platform
+        id: package
+        env:
+          PURE_BUILD_PLATFORM: ${{ inputs.platform }}
+          PURE_BUILD_RUNNER: ${{ inputs.runner }}
+        run: bash scripts/ci/build-native.sh
+      - name: Preserve successful package independently
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ inputs.platform }}
+          path: |
+            ${{ steps.package.outputs.asset }}
+            ${{ steps.package.outputs.manifest }}
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+          overwrite: true

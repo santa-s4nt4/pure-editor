@@ -2,138 +2,120 @@ name: Build and Release (macOS & iOS)
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
     inputs:
       runner:
-        description: 'macOS の実行環境（割り当て待ちが長い場合は切り替え）'
+        description: 'Mac ビルド環境（割り当て時間は GitHub 側の状況に依存）'
         type: choice
         default: macos-15-intel
-        options:
-          - macos-15-intel
-          - macos-26
-          - macos-15
+        options: [macos-15-intel, macos-26-intel, macos-26, macos-15]
+      platform:
+        description: 'both は配布まで実行。片方だけの場合は成果物の検証のみ'
+        type: choice
+        default: both
+        options: [both, macos, ios]
 
-# latest-build を更新する実行は、ブランチごとに最新の1件だけ残します。
 concurrency:
   group: pure-release-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
-  contents: write # Releasesの作成・ファイルアップロードに必須
+  contents: read
 
 jobs:
-  build-and-release:
-    runs-on: ${{ inputs.runner || 'macos-15-intel' }}
-    # 実行開始後の上限です。ランナーの割り当て待ちには適用されません。
-    timeout-minutes: 45
-    defaults:
-      run:
-        shell: bash
+  verify:
+    name: Verify and build frontend (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Show runner and Xcode versions
-        run: |
-          uname -m
-          sw_vers
-          xcodebuild -version
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '22.12.0'
-          cache: 'npm'
-
-      - name: Setup Rust (macOS & iOS targets)
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,aarch64-apple-ios
-
-      - name: Rust Cache
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: './src-tauri -> target'
-          # 異なる macOS / SDK でコンパイルしたキャッシュを混ぜません。
-          shared-key: ${{ inputs.runner || 'macos-15-intel' }}
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run unit tests
-        run: npm test -- --cache=false
-
-      - name: Build frontend once for macOS and iOS
+          cache: npm
+      - name: Validate workflows
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+        run: |
+          ARCHIVE="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          CHECKSUMS="actionlint_${ACTIONLINT_VERSION}_checksums.txt"
+          BASE="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}"
+          curl --fail --location --retry 3 "$BASE/$ARCHIVE" --output "$RUNNER_TEMP/$ARCHIVE"
+          curl --fail --location --retry 3 "$BASE/$CHECKSUMS" --output "$RUNNER_TEMP/$CHECKSUMS"
+          (cd "$RUNNER_TEMP" && sha256sum --check --ignore-missing "$CHECKSUMS")
+          tar -xzf "$RUNNER_TEMP/$ARCHIVE" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -shellcheck=
+          bash -n scripts/ci/build-native.sh
+          bash -n scripts/ci/publish-release.sh
+      - run: npm ci
+      - name: Test app and release integrity
+        run: |
+          npm test -- --cache=false
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests/ci -v
+      - name: Build portable frontend once
         run: |
           npm run build
-          test -s dist/index.html
+          python3 scripts/ci/artifacts.py stamp-frontend
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
 
-      # ==========================================
-      # 1. macOS App (.app -> pure-macos.zip)
-      # ==========================================
-      - name: Build Tauri macOS App
-        run: npm run tauri build -- --bundles app --target aarch64-apple-darwin --ci --config '{"build":{"beforeBuildCommand":""}}'
+  macos:
+    name: macOS
+    needs: verify
+    if: ${{ !inputs.platform || inputs.platform == 'both' || inputs.platform == 'macos' }}
+    uses: ./.github/workflows/native-build.yaml
+    with:
+      platform: macos
+      runner: ${{ inputs.runner || 'macos-15-intel' }}
 
-      - name: Ad-hoc Sign and Package macOS ZIP
+  ios:
+    name: iOS
+    needs: verify
+    if: ${{ !inputs.platform || inputs.platform == 'both' || inputs.platform == 'ios' }}
+    uses: ./.github/workflows/native-build.yaml
+    with:
+      platform: ios
+      runner: ${{ inputs.runner || 'macos-15-intel' }}
+
+  publish:
+    name: Summarize and publish verified pair (Linux)
+    needs: [verify, macos, ios]
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Summarize each stage
+        env:
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          MACOS_RESULT: ${{ needs.macos.result }}
+          IOS_RESULT: ${{ needs.ios.result }}
         run: |
-          APP_PATH=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/macos -maxdepth 1 -type d -name "*.app" -print -quit)
-          test -n "$APP_PATH"
-          echo "Found macOS app at: $APP_PATH"
-          APP_EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_PATH/Contents/Info.plist")
-          lipo -verify_arch arm64 "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE"
-          lipo -archs "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE"
-
-          # Apple Developer ID が不要なアドホック署名を付与
-          codesign --force --deep --sign - "$APP_PATH"
-
-          # シンボリックリンクや実行権限を保持したまま圧縮
-          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" pure-macos.zip
-
-      # ==========================================
-      # 2. iOS App (Unsigned .ipa for SideStore/AltStore)
-      # ==========================================
-      - name: Initialize iOS Xcode Project
-        run: |
-          if [ ! -d "src-tauri/gen/apple" ]; then
-            npm run tauri ios init -- --ci
-          fi
-
-      # ios init で生成された Xcode のアイコンにも、配布元画像を反映します。
-      - name: Apply pure app icons to iOS project
-        run: |
-          npm run tauri icon -- public/pure.png
-          cmp src-tauri/icons/ios/AppIcon-512@2x.png src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png
-
-      - name: Build Unsigned iOS IPA
-        run: |
-          # Tauri CLI が Xcode の Rust ビルドフェーズ向け設定サーバーを提供します。
-          npm run tauri ios build -- --ci --no-sign --target aarch64 --config '{"build":{"beforeBuildCommand":""}}'
-
-          IOS_IPA=$(find src-tauri/gen/apple/build/arm64 -maxdepth 1 -name "*.ipa" -type f -print -quit)
-          test -n "$IOS_IPA"
-          cp "$IOS_IPA" pure-ios-unsigned.ipa
-          ls -lh pure-ios-unsigned.ipa
-
-      # ==========================================
-      # 3. GitHub Releases へ両方アップロード
-      # ==========================================
-      - name: Upload macOS ZIP and iOS IPA to GitHub Releases
+          {
+            echo '### pure build results'
+            echo "Frontend / tests: $VERIFY_RESULT"
+            echo "macOS: $MACOS_RESULT"
+            echo "iOS: $IOS_RESULT"
+            echo 'Native builds that succeeded remain in this run’s Artifacts for 7 days.'
+            echo 'latest-build is updated only when both platforms succeed at the same commit.'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/checkout@v4
+        if: ${{ needs.macos.result == 'success' && needs.ios.result == 'success' }}
+      - uses: actions/download-artifact@v4
+        if: ${{ needs.macos.result == 'success' && needs.ios.result == 'success' }}
+        with:
+          pattern: native-*
+          merge-multiple: true
+          path: release/
+      - name: Verify commit and publish both packages
+        if: ${{ needs.macos.result == 'success' && needs.ios.result == 'success' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # 並列制御導入前の再実行や、古いコミットの手動実行も公開しません。
-          LATEST_MAIN_SHA=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')
-          if [ "$GITHUB_SHA" != "$LATEST_MAIN_SHA" ]; then
-            echo "::notice::main が更新されたため、このコミットの配布をスキップします。"
-            exit 0
-          fi
-          TAG="latest-build"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" pure-macos.zip pure-ios-unsigned.ipa --clobber
-          else
-            gh release create "$TAG" pure-macos.zip pure-ios-unsigned.ipa \
-              --title "pure (Latest macOS & iOS Build)" \
-              --notes "mainブランチから自動ビルドされた最新のmacOS版（pure-macos.zip）およびiOS未署名版（pure-ios-unsigned.ipa）です。"
-          fi
+        run: bash scripts/ci/publish-release.sh
