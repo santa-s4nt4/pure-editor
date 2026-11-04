@@ -84,7 +84,7 @@ export class PaperNotebook {
   async refresh() {
     if (!this.client?.connected) return;
     await this.sync();
-    for (const path of this.documents.keys()) {
+    for (const path of [...this.documents.keys()]) {
       await this.queue;
       if (this.documents.get(path)!.dirty) continue;
       const remote = await this.client.export(this.documents.get(path)!.id);
@@ -117,7 +117,7 @@ export class PaperNotebook {
     this.running = workspaceLock(this.backend.coordinationKey ? `${this.backend.coordinationKey}:paper-sync` : undefined, async () => {
       try {
         if (this.backend.coordinationKey) await this.exclusive(async () => {});
-        for (const path of this.documents.keys()) {
+        for (const path of [...this.documents.keys()]) {
           for (;;) {
             await this.queue;
             const snapshot = { ...this.documents.get(path)! };

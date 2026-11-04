@@ -69,4 +69,19 @@ describe('複数ウィンドウの保存', () => {
     expect(path).toMatch(/\/会議\.paper$/);
     expect([...files.entries()].some(([name, bytes]) => name.startsWith('.paper/backups/') && new TextDecoder().decode(bytes).includes('窓A'))).toBe(true);
   });
+
+  it('Paper の再読み込み中に共有状態を更新しても、同じ文書を繰り返し取得しない', async () => {
+    const { a } = await windows();
+    const original = { file: { id: 'id:doc', name: '会議.paper' }, revision: 1, markdown: '# 会議\n\n元' };
+    let exports = 0;
+    const book = new PaperNotebook(a.backend, {
+      connected: true,
+      export: async () => { if (++exports > 2) throw new Error('同じ文書を繰り返しています'); return { ...original, revision: 2, markdown: '# 会議\n\n更新済み' }; },
+      update: async () => 2,
+    });
+    const path = await book.attach(original);
+    await book.refresh();
+    expect(exports).toBe(1);
+    expect(await book.readNote(path)).toContain('更新済み');
+  });
 });
