@@ -9,6 +9,7 @@ import { filenameTitle, namedNotePath, noteId, renameNoteLinks } from './note-fi
 import { isPaperPath, type PaperNotebook } from './paper-notebook';
 import { diskImagePaths } from './image-paths';
 import { publicationDocument, withPublication, type Publication } from './publication';
+import { workspaceLock } from './workspace';
 
 export interface Settings {
   folder: string;
@@ -27,6 +28,7 @@ export interface Note { path: string; title: string; tags: string[]; excerpt: st
 export interface SyncEntry { updatedAt: number; sha256: string; deleted?: boolean }
 export interface Manifest { version: 1; files: Record<string, SyncEntry> }
 export interface LocalBackend {
+  readonly coordinationKey?: string;
   read(path: string): Promise<Uint8Array | null>;
   write(path: string, bytes: Uint8Array): Promise<void>;
   remove(path: string): Promise<void>;
@@ -71,6 +73,7 @@ export function parseManifest(bytes: Uint8Array): Manifest {
 }
 
 class NativeBackend implements LocalBackend {
+  get coordinationKey() { return `pure-notes:${this.root}`; }
   constructor(private root: string, private images: string) {}
   private async full(path: string) {
     safeRelativePath(path);
@@ -121,6 +124,7 @@ class NativeBackend implements LocalBackend {
 
 /** Web プレビューも再読み込みで失われない。実機では必ず Tauri FS を使う。 */
 export class BrowserBackend implements LocalBackend {
+  readonly coordinationKey = 'pure-notes:browser';
   private database: Promise<IDBDatabase>;
   constructor() {
     this.database = new Promise((resolve, reject) => {
@@ -209,7 +213,16 @@ export async function loadSettings(): Promise<Settings> {
   if (!settings.imagesFolder || mobile) settings.imagesFolder = await join(settings.folder, 'assets');
   return settings;
 }
-export async function persistSettings(settings: Settings) {
+export function persistSettings(settings: Settings) {
+  return workspaceLock('pure-settings', () => writeSettings(settings));
+}
+export function persistLastFile(path: string) {
+  return workspaceLock('pure-settings', async () => {
+    const settings = await loadSettings();
+    if (settings.lastFile !== path) await writeSettings({ ...settings, lastFile: path });
+  });
+}
+async function writeSettings(settings: Settings) {
   if (!native) {
     localStorage.setItem('pure-settings', JSON.stringify({ ...settings, secretAccessKey: '', syncEnabled: false }));
     return;
@@ -274,7 +287,10 @@ export class StorageManager {
   onChange(listener: (event: StorageEvent) => void) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   private emit(event: StorageEvent) { for (const listener of this.listeners) listener(event); }
   private exclusive<T>(task: () => Promise<T>): Promise<T> {
-    const next = this.queue.then(task);
+    const next = this.queue.then(() => workspaceLock(this.backend.coordinationKey, async () => {
+      if (this.backend.coordinationKey) await this.readMetadata();
+      return task();
+    }));
     this.queue = next.catch(() => undefined);
     return next;
   }
@@ -282,9 +298,11 @@ export class StorageManager {
     await this.backend.write('_sync.json', encoder.encode(JSON.stringify(this.manifest, null, 2)));
     await this.backend.write('_sync-state.json', encoder.encode(JSON.stringify(this.bases)));
   }
-  async initialize() {
+  private async readMetadata() {
     const existing = await this.backend.read('_sync.json');
-    if (existing) this.manifest = parseManifest(existing);
+    this.manifest = existing ? parseManifest(existing) : emptyManifest();
+    this.bases = Object.create(null);
+    this.aliases = Object.create(null);
     const state = await this.backend.read('_sync-state.json');
     if (state) {
       const parsed = JSON.parse(decoder.decode(state));
@@ -294,6 +312,10 @@ export class StorageManager {
     if (aliases) for (const [from, to] of Object.entries(JSON.parse(decoder.decode(aliases)))) {
       if (typeof to === 'string') this.aliases[safeRelativePath(from)] = safeRelativePath(to);
     }
+  }
+  async reloadSharedState() { await this.exclusive(async () => { if (!this.backend.coordinationKey) await this.readMetadata(); }); }
+  async initialize() {
+    await this.reloadSharedState();
     await this.refresh();
   }
   async refresh() {
@@ -334,6 +356,7 @@ export class StorageManager {
   private editorText(text: string) { return fromMarkdown(publicationDocument(text).body, (label, path) => this.titlePaths.get(label) === this.resolvePath(path)); }
   async readNote(path: string) {
     if (isPaperPath(path)) return this.paper?.readNote(path) ?? null;
+    if (this.backend.coordinationKey) await this.reloadSharedState();
     await this.queue;
     path = this.resolvePath(path);
     await this.listNotes();
@@ -347,6 +370,7 @@ export class StorageManager {
     if (!path.endsWith('.md')) throw new Error('記事を選択してください。');
     const backup = `.trash/${Date.now()}-${crypto.randomUUID()}/${path}`;
     await this.exclusive(async () => {
+      path = this.resolvePath(path);
       const bytes = await this.backend.read(path);
       if (!bytes) return;
       await this.backend.write(backup, bytes);
@@ -368,6 +392,7 @@ export class StorageManager {
     if (isPaperPath(path)) throw new Error('Paper 文書は公開できません。Markdown の記事を選択してください。');
     path = this.resolvePath(path);
     await this.exclusive(async () => {
+      path = this.resolvePath(path);
       const bytes = await this.backend.read(path);
       if (!bytes) throw new Error('記事が見つかりません。');
       await this.writeIndexed(path, encoder.encode(withPublication(publicationDocument(decoder.decode(bytes)).body, publication)));
@@ -412,17 +437,22 @@ export class StorageManager {
   }
   async saveNamedNote(path: string, text: string, expectedText?: string): Promise<string> {
     if (isPaperPath(path)) { await this.saveNote(path, text, expectedText); return path; }
-    path = this.resolvePath(path);
-    await this.saveNote(path, text, expectedText);
-    const id = noteId(path) ?? (await sha256(encoder.encode(`pure-note:${path}`))).slice(0, 32);
-    const next = namedNotePath(noteTitle(text, filenameTitle(path)), id, path);
-    // APFS may address differently cased names as the same file: never remove its destination.
-    if (path.normalize('NFC').toLocaleLowerCase() === next.normalize('NFC').toLocaleLowerCase()) return path;
-    if (path !== next) {
-      await this.exclusive(() => this.renameNotes(new Map([[path, next]])));
-      this.emit({ type: 'files' }); void this.sync();
-    }
-    return next;
+    await this.listNotes();
+    let savedPath = path;
+    await this.exclusive(async () => {
+      path = this.resolvePath(path);
+      safeRelativePath(path);
+      const title = noteTitle(text, filenameTitle(path));
+      const bytes = encoder.encode(toMarkdown(text, name => name === title ? path : this.titlePaths.get(name) ?? pagePath(name)));
+      await this.writeNoteBytes(path, bytes, expectedText, true);
+      const id = noteId(path) ?? (await sha256(encoder.encode(`pure-note:${path}`))).slice(0, 32);
+      const next = namedNotePath(title, id, path);
+      // APFS may address differently cased names as the same file.
+      savedPath = path.normalize('NFC').toLocaleLowerCase() === next.normalize('NFC').toLocaleLowerCase() ? path : next;
+      if (path !== savedPath) await this.renameNotes(new Map([[path, savedPath]]));
+    });
+    this.emit({ type: 'files' }); void this.sync();
+    return savedPath;
   }
   private async renameNotes(moves: ReadonlyMap<string, string>) {
     if (!moves.size) return;
@@ -462,27 +492,29 @@ export class StorageManager {
     this.manifest.files[path] = entry ?? { sha256: await sha256(bytes), updatedAt: Date.now() };
   }
   private async saveBytes(path: string, bytes: Uint8Array, expectedText?: string, preservePublication = false) {
-    await this.exclusive(async () => {
-      if (preservePublication) {
-        const existing = await this.backend.read(path);
-        const publication = existing ? publicationDocument(decoder.decode(existing)).publication : undefined;
-        bytes = encoder.encode(withPublication(decoder.decode(bytes), publication));
-      }
-      const hash = await sha256(bytes);
-      if (this.manifest.files[path]?.sha256 !== hash || this.manifest.files[path]?.deleted) {
-        if (expectedText !== undefined) {
-          const existing = await this.backend.read(path);
-          if (existing && this.editorText(decoder.decode(existing)) !== expectedText) {
-            const conflict = `${path.slice(0, -3)} (conflict ${Date.now()}-${crypto.randomUUID().slice(0, 6)}).md`;
-            await this.writeIndexed(conflict, encoder.encode(publicationDocument(decoder.decode(existing)).body));
-          }
-        }
-        await this.writeIndexed(path, bytes, { sha256: hash, updatedAt: Date.now() });
-        await this.persistIndex();
-      }
-    });
+    await this.exclusive(() => this.writeNoteBytes(this.resolvePath(path), bytes, expectedText, preservePublication));
     this.emit({ type: 'files' });
     void this.sync();
+  }
+  private async writeNoteBytes(path: string, bytes: Uint8Array, expectedText?: string, preservePublication = false) {
+    if (expectedText !== undefined && !await this.backend.read(path)) throw new Error('この記事は別のウィンドウで削除されています。入力内容は一時保存に残っています。');
+    if (preservePublication) {
+      const existing = await this.backend.read(path);
+      const publication = existing ? publicationDocument(decoder.decode(existing)).publication : undefined;
+      bytes = encoder.encode(withPublication(decoder.decode(bytes), publication));
+    }
+    const hash = await sha256(bytes);
+    if (this.manifest.files[path]?.sha256 !== hash || this.manifest.files[path]?.deleted) {
+      if (expectedText !== undefined) {
+        const existing = await this.backend.read(path);
+        if (existing && this.editorText(decoder.decode(existing)) !== expectedText) {
+          const conflict = `${path.slice(0, -3)} (conflict ${Date.now()}-${crypto.randomUUID().slice(0, 6)}).md`;
+          await this.writeIndexed(conflict, encoder.encode(publicationDocument(decoder.decode(existing)).body));
+        }
+      }
+      await this.writeIndexed(path, bytes, { sha256: hash, updatedAt: Date.now() });
+      await this.persistIndex();
+    }
   }
   async saveImage(bytes: Uint8Array): Promise<string> {
     const hash = await sha256(bytes);
@@ -504,15 +536,19 @@ export class StorageManager {
     this.emit({ type: 'sync', state: 'syncing' });
     this.running = (async () => {
       try {
-        let attempts = 0;
-        do {
-          this.syncAgain = false;
-          try { await this.reconcile(this.remote!); attempts = 0; }
-          catch (error) {
-            if (error instanceof SyncConflict && ++attempts < 4) { this.syncAgain = true; continue; }
-            throw error;
-          }
-        } while (this.syncAgain && this.remote);
+        await workspaceLock(this.backend.coordinationKey ? `${this.backend.coordinationKey}:sync` : undefined, async () => {
+          if (!this.remote) return;
+          let attempts = 0;
+          do {
+            this.syncAgain = false;
+            if (this.backend.coordinationKey) await this.reloadSharedState();
+            try { await this.reconcile(this.remote!); attempts = 0; }
+            catch (error) {
+              if (error instanceof SyncConflict && ++attempts < 4) { this.syncAgain = true; continue; }
+              throw error;
+            }
+          } while (this.syncAgain && this.remote);
+        });
         this.emit({ type: 'sync', state: 'idle' });
       } catch (error) {
         this.emit({ type: 'sync', state: navigator.onLine ? 'error' : 'offline', message: error instanceof Error ? error.message : '同期を完了できませんでした。' });

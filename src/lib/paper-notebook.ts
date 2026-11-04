@@ -1,6 +1,7 @@
 import type { LocalBackend, Note } from './storage';
 import type { PaperClient, PaperExport } from './paper-client';
 import { fromMarkdown, extractTags, noteTitle, toMarkdown } from './transformer';
+import { workspaceLock } from './workspace';
 interface PaperDocument { path: string; id: string; name: string; remotePath: string; markdown: string; revision: number; dirty: boolean; updatedAt: number }
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -11,10 +12,18 @@ export class PaperNotebook {
   private queue: Promise<unknown> = Promise.resolve();
   private running: Promise<void> | null = null;
   constructor(private backend: LocalBackend, private client: Pick<PaperClient, 'connected' | 'export' | 'update'> | null, private changed: () => void = () => {}, private status: (message: string) => void = () => {}) {}
-  private exclusive<T>(run: () => Promise<T>) { const result = this.queue.then(run); this.queue = result.catch(() => undefined); return result; }
+  private exclusive<T>(run: () => Promise<T>) {
+    const key = this.backend.coordinationKey;
+    const result = this.queue.then(() => workspaceLock(key ? `${key}:paper` : undefined, async () => {
+      if (key) await this.initialize();
+      return run();
+    }));
+    this.queue = result.catch(() => undefined); return result;
+  }
   private persist() { return this.backend.write(indexPath, encoder.encode(JSON.stringify({ version: 1, documents: [...this.documents.values()] }))); }
   async initialize() {
     const bytes = await this.backend.read(indexPath);
+    this.documents.clear();
     if (!bytes) return;
     const value = JSON.parse(decoder.decode(bytes));
     if (value?.version !== 1 || !Array.isArray(value.documents)) throw new Error('Paper のローカル保存情報が不正です。');
@@ -24,13 +33,14 @@ export class PaperNotebook {
     }
   }
   async listNotes(): Promise<Note[]> {
+    if (this.backend.coordinationKey) await this.exclusive(async () => {});
     await this.queue;
     return [...this.documents.values()].map(doc => {
       const text = fromMarkdown(doc.markdown);
       return { path: doc.path, title: noteTitle(text, doc.name.replace(/\.paper$/i, '')), tags: extractTags(text), excerpt: text.replace(/\n/g, ' ').slice(0, 100), updatedAt: doc.updatedAt };
     });
   }
-  async readNote(path: string) { await this.queue; const doc = this.documents.get(path); return doc ? fromMarkdown(doc.markdown) : null; }
+  async readNote(path: string) { if (this.backend.coordinationKey) await this.exclusive(async () => {}); await this.queue; const doc = this.documents.get(path); return doc ? fromMarkdown(doc.markdown) : null; }
   async attach(exported: PaperExport, original?: { name: string; bytes: Uint8Array }) {
     const existing = [...this.documents.values()].find(doc => doc.id === exported.file.id);
     if (existing) {
@@ -47,8 +57,10 @@ export class PaperNotebook {
     if (!/^[^<>:"/\\|?*\u0000-\u001f]+\.paper$/i.test(name) || name.startsWith('.')) throw new Error('Paper のファイル名が不正です。');
     const digest = await crypto.subtle.digest('SHA-256', encoder.encode(exported.file.id));
     const key = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('').slice(0, 32);
-    const path = `Paper/${key}/${name}`;
+    let path = `Paper/${key}/${name}`;
     await this.exclusive(async () => {
+      const attached = [...this.documents.values()].find(doc => doc.id === exported.file.id);
+      if (attached) { path = attached.path; return; }
       if (original) await this.backend.write(path, original.bytes);
       this.documents.set(path, { path, id: exported.file.id, name, remotePath: exported.file.path_display ?? exported.file.id, markdown: exported.markdown, revision: exported.revision, dirty: false, updatedAt: Date.parse(exported.file.server_modified ?? '') || Date.now() });
       try { await this.persist(); } catch (error) { this.documents.delete(path); throw error; }
@@ -102,8 +114,9 @@ export class PaperNotebook {
   sync(): Promise<void> {
     if (this.running) return this.running;
     if (!this.client?.connected) return Promise.resolve();
-    this.running = (async () => {
+    this.running = workspaceLock(this.backend.coordinationKey ? `${this.backend.coordinationKey}:paper-sync` : undefined, async () => {
       try {
+        if (this.backend.coordinationKey) await this.exclusive(async () => {});
         for (const path of this.documents.keys()) {
           for (;;) {
             await this.queue;
@@ -120,7 +133,7 @@ export class PaperNotebook {
         }
         this.status('Dropbox Paper に反映済み');
       } catch (error) { this.status(error instanceof Error ? error.message : String(error)); }
-    })().finally(() => { this.running = null; });
+    }).finally(() => { this.running = null; });
     return this.running;
   }
 }
