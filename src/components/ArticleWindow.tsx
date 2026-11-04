@@ -1,3 +1,4 @@
+import { publicationDocument } from '../lib/publication';
 import { Show, createSignal, onCleanup, onMount } from 'solid-js';
 import { invoke } from '@tauri-apps/api/core';
 import { openUrl } from '@tauri-apps/plugin-opener';
@@ -35,7 +36,7 @@ export default function ArticleWindow() {
         } else {
           const bytes = await backend.read(path);
           if (!bytes) throw new Error('記事が見つかりません。');
-          text = fromMarkdown(new TextDecoder().decode(bytes));
+          text = fromMarkdown(publicationDocument(new TextDecoder().decode(bytes)).body);
         }
         if (disposed) return;
         const title = noteTitle(text, filenameTitle(path));

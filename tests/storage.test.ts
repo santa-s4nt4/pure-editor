@@ -247,3 +247,35 @@ it('Paperは自動改名やR2へ送らず、同じ.paperの名前のまま読み
   const remote = new MemoryRemote(); manager.setRemote(remote); await manager.sync();
   expect([...remote.objects.keys()].some(key => key.includes('.paper') || key.includes('新しい題名'))).toBe(false);
 });
+
+describe('記事の公開設定', () => {
+  const publication = { repository: 'santa-s4nt4/pure-notes', branch: 'main', visibility: 'public' as const, revision: '11111111-1111-4111-8111-111111111111', parent: null };
+  it('既存記事は非公開で、公開設定は本文に表示せず保存・名前変更・R2 同期する', async () => {
+    const remote = new MemoryRemote(); const a = await setup(remote);
+    const path = await a.manager.createNote('公開テスト'); await a.manager.saveNote(path, '# 公開テスト\n\n[tag]');
+    expect((await a.manager.listNotes())[0].publication).toBeUndefined();
+    await a.manager.setPublication(path, publication);
+    expect(await a.manager.readNote(path)).toBe('# 公開テスト\n\n[tag]');
+    const renamed = await a.manager.saveNamedNote(path, '# 新しい名前\n\n[tag]');
+    await a.manager.sync(); const b = await setup(remote); await b.manager.sync();
+    const note = (await b.manager.listNotes()).find(note => note.path === renamed)!;
+    expect(note.publication).toEqual(publication); expect(note.tags).toEqual(['tag']);
+    expect(await b.manager.readNote(renamed)).toBe('# 新しい名前\n\n[tag]');
+  });
+  it('古い編集内容の保存でも最新の非公開設定を維持し、競合コピーを公開しない', async () => {
+    const a = await setup(); const path = await a.manager.createNote('test');
+    await a.manager.saveNote(path, 'original'); await a.manager.setPublication(path, publication);
+    await a.manager.setPublication(path, { ...publication, visibility: 'private', revision: '22222222-2222-4222-8222-222222222222', parent: publication.revision });
+    await a.manager.saveNote(path, 'other'); await a.manager.saveNote(path, 'edit', 'original');
+    const notes = await a.manager.listNotes();
+    expect(notes.find(note => note.path === path)?.publication?.visibility).toBe('private');
+    expect(notes.find(note => note.path !== path)?.publication).toBeUndefined();
+  });
+  it('公開記事を削除して復元しても、自動で公開に戻らない', async () => {
+    const a = await setup(); const path = await a.manager.createNote('test'); await a.manager.saveNote(path, 'text');
+    await a.manager.setPublication(path, publication);
+    const backup = await a.manager.deleteNote(path); await a.manager.restoreNote(path, backup);
+    expect((await a.manager.listNotes())[0].publication?.visibility).toBe('private');
+    expect(await a.manager.readNote(path)).toBe('text');
+  });
+});

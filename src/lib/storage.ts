@@ -8,6 +8,7 @@ import { extractTags, fromMarkdown, noteTitle, pagePath, toMarkdown } from './tr
 import { filenameTitle, namedNotePath, noteId, renameNoteLinks } from './note-filenames';
 import { isPaperPath, type PaperNotebook } from './paper-notebook';
 import { diskImagePaths } from './image-paths';
+import { publicationDocument, withPublication, type Publication } from './publication';
 
 export interface Settings {
   folder: string;
@@ -19,8 +20,10 @@ export interface Settings {
   secretAccessKey: string;
   syncEnabled: boolean;
   lastFile: string;
+  githubRepository?: string;
+  githubBranch?: string;
 }
-export interface Note { path: string; title: string; tags: string[]; excerpt: string; updatedAt: number }
+export interface Note { path: string; title: string; tags: string[]; excerpt: string; updatedAt: number; publication?: Publication }
 export interface SyncEntry { updatedAt: number; sha256: string; deleted?: boolean }
 export interface Manifest { version: 1; files: Record<string, SyncEntry> }
 export interface LocalBackend {
@@ -318,8 +321,9 @@ export class StorageManager {
       if (cached?.hash === entry.sha256 && cached.note.updatedAt === entry.updatedAt) { notes.push(cached.note); continue; }
       const bytes = await this.backend.read(path);
       if (!bytes) continue;
-      const text = fromMarkdown(decoder.decode(bytes));
-      const note = { path, title: noteTitle(text, filenameTitle(path)), tags: extractTags(text), excerpt: text.replace(/^#+\s+/gm, '').replace(/\n/g, ' ').slice(0, 100), updatedAt: entry.updatedAt };
+      const document = publicationDocument(decoder.decode(bytes));
+      const text = fromMarkdown(document.body);
+      const note = { publication: document.publication, path, title: noteTitle(text, filenameTitle(path)), tags: extractTags(text), excerpt: text.replace(/^#+\s+/gm, '').replace(/\n/g, ' ').slice(0, 100), updatedAt: entry.updatedAt };
       this.noteCache.set(path, { hash: entry.sha256, note }); notes.push(note);
     }
     if (this.paper) notes.push(...await this.paper.listNotes());
@@ -327,7 +331,7 @@ export class StorageManager {
     this.titlePaths = new Map([...notes].reverse().map(note => [note.title, note.path]));
     return notes;
   }
-  private editorText(text: string) { return fromMarkdown(text, (label, path) => this.titlePaths.get(label) === this.resolvePath(path)); }
+  private editorText(text: string) { return fromMarkdown(publicationDocument(text).body, (label, path) => this.titlePaths.get(label) === this.resolvePath(path)); }
   async readNote(path: string) {
     if (isPaperPath(path)) return this.paper?.readNote(path) ?? null;
     await this.queue;
@@ -356,7 +360,20 @@ export class StorageManager {
     const bytes = await this.backend.read(backup);
     if (!bytes) throw new Error('復元する記事が見つかりません。');
     if (await this.backend.read(path)) throw new Error('同名の記事があるため復元できません。');
-    await this.saveBytes(path, bytes);
+    const document = publicationDocument(decoder.decode(bytes));
+    const publication = document.publication ? { ...document.publication, visibility: 'private' as const, parent: document.publication.revision, revision: crypto.randomUUID() } : undefined;
+    await this.saveBytes(path, encoder.encode(withPublication(document.body, publication)));
+  }
+  async setPublication(path: string, publication: Publication) {
+    if (isPaperPath(path)) throw new Error('Paper 文書は公開できません。Markdown の記事を選択してください。');
+    path = this.resolvePath(path);
+    await this.exclusive(async () => {
+      const bytes = await this.backend.read(path);
+      if (!bytes) throw new Error('記事が見つかりません。');
+      await this.writeIndexed(path, encoder.encode(withPublication(publicationDocument(decoder.decode(bytes)).body, publication)));
+      await this.persistIndex();
+    });
+    this.emit({ type: 'files' }); void this.sync();
   }
   async saveNote(path: string, text: string, expectedText?: string) {
     if (isPaperPath(path)) { if (!this.paper) throw new Error('Paper の保存先がありません。'); await this.paper.saveNote(path, text, expectedText); return; }
@@ -364,7 +381,7 @@ export class StorageManager {
     safeRelativePath(path);
     await this.listNotes();
     const currentTitle = noteTitle(text, filenameTitle(path));
-    await this.saveBytes(path, encoder.encode(toMarkdown(text, name => name === currentTitle ? path : this.titlePaths.get(name) ?? pagePath(name))), expectedText);
+    await this.saveBytes(path, encoder.encode(toMarkdown(text, name => name === currentTitle ? path : this.titlePaths.get(name) ?? pagePath(name))), expectedText, true);
   }
   async createNote(name: string): Promise<string> {
     let path = namedNotePath(name, crypto.randomUUID().replace(/-/g, ''));
@@ -387,7 +404,7 @@ export class StorageManager {
         if (!bytes) continue;
         // Deriving legacy IDs from their old paths gives both devices the same identity.
         const id = (await sha256(encoder.encode(`pure-note:${path}`))).slice(0, 32);
-        moves.set(path, namedNotePath(noteTitle(fromMarkdown(decoder.decode(bytes)), filenameTitle(path)), id, path));
+        moves.set(path, namedNotePath(noteTitle(fromMarkdown(publicationDocument(decoder.decode(bytes)).body), filenameTitle(path)), id, path));
       }
       await this.renameNotes(moves);
     });
@@ -444,15 +461,20 @@ export class StorageManager {
     await this.backend.write(path, bytes);
     this.manifest.files[path] = entry ?? { sha256: await sha256(bytes), updatedAt: Date.now() };
   }
-  private async saveBytes(path: string, bytes: Uint8Array, expectedText?: string) {
+  private async saveBytes(path: string, bytes: Uint8Array, expectedText?: string, preservePublication = false) {
     await this.exclusive(async () => {
+      if (preservePublication) {
+        const existing = await this.backend.read(path);
+        const publication = existing ? publicationDocument(decoder.decode(existing)).publication : undefined;
+        bytes = encoder.encode(withPublication(decoder.decode(bytes), publication));
+      }
       const hash = await sha256(bytes);
       if (this.manifest.files[path]?.sha256 !== hash || this.manifest.files[path]?.deleted) {
         if (expectedText !== undefined) {
           const existing = await this.backend.read(path);
           if (existing && this.editorText(decoder.decode(existing)) !== expectedText) {
             const conflict = `${path.slice(0, -3)} (conflict ${Date.now()}-${crypto.randomUUID().slice(0, 6)}).md`;
-            await this.writeIndexed(conflict, existing);
+            await this.writeIndexed(conflict, encoder.encode(publicationDocument(decoder.decode(existing)).body));
           }
         }
         await this.writeIndexed(path, bytes, { sha256: hash, updatedAt: Date.now() });
@@ -512,7 +534,8 @@ export class StorageManager {
           const current = this.manifest.files[path];
           const bytes = await this.backend.read(path);
           if (bytes && current && fingerprint(current) !== this.bases[path]) {
-            await this.writeIndexed(`${path.slice(0, -3)} (conflict ${Date.now()}-${crypto.randomUUID().slice(0, 6)}).md`, bytes);
+            const extension = path.endsWith('.md') ? '.md' : '.webp';
+            await this.writeIndexed(`${path.slice(0, -extension.length)} (conflict ${Date.now()}-${crypto.randomUUID().slice(0, 6)})${extension}`, extension === '.md' ? encoder.encode(publicationDocument(decoder.decode(bytes)).body) : bytes);
           }
           if (bytes) {
             await this.backend.write(`.trash/${Date.now()}-${crypto.randomUUID()}/${path}`, bytes);
@@ -532,7 +555,7 @@ export class StorageManager {
           if (bytes) {
             const extension = path.endsWith('.md') ? '.md' : '.webp';
             const conflict = `${path.slice(0, -extension.length)} (conflict ${Date.now()}-${crypto.randomUUID().slice(0, 6)})${extension}`;
-            await this.writeIndexed(conflict, bytes);
+            await this.writeIndexed(conflict, extension === '.md' ? encoder.encode(publicationDocument(decoder.decode(bytes)).body) : bytes);
           }
         }
         await this.writeIndexed(path, object.bytes, entry);
