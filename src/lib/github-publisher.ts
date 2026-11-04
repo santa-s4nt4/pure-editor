@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { fetch as nativeFetch } from '@tauri-apps/plugin-http';
-import { mapImagePaths, fromMarkdown, extractTags, noteTitle } from './transformer';
+import { mapImagePaths, fromMarkdown, toMarkdown, extractTags, noteTitle } from './transformer';
 import { noteId } from './note-filenames';
 import { native, sha256, type StorageManager, type Note } from './storage';
 import { publicationDocument, validRevision, type Publication } from './publication';
@@ -156,7 +156,7 @@ export class ArticlePublisher {
         const target = `assets/${await sha256(bytes)}.webp`;
         assets.set(target, bytes); mapped.set(path, `../${target}`);
       }
-      const body = mapImagePaths(document.body, path => mapped.get(path) ?? path);
+      const body = mapImagePaths(toMarkdown(document.body), path => mapped.get(path) ?? path);
       const markdownPath = `posts/${note.path.split('/').at(-1)!}`;
       const editorBody = fromMarkdown(document.body);
       const post: PublishedArticle = { id, title: noteTitle(editorBody, note.title), tags: extractTags(editorBody), excerpt: fromMarkdown(document.body).replace(/^#+\s+/gm, '').replace(/\n/g, ' ').slice(0, 160), updatedAt: note.updatedAt, markdownPath, assets: [...assets.keys()].sort(), contentHash: await sha256(encode(body)), revision: publication.revision };

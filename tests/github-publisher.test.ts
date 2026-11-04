@@ -47,6 +47,14 @@ describe('GitHub 記事公開', () => {
     expect([...remote.files.values()].map(decode).join()).not.toContain('秘密の記事');
     expect(remote.commits[0]).toContain('index.json'); expect(remote.commits[0]).toContain(post.markdownPath);
   });
+  it('以前保存した表示名が先のリンクも、公開 Markdown では通常のリンクに変換する', async () => {
+    const { storage, remote, path, visibility } = await setup();
+    await storage.backend.write(path, encode('# 公開する記事\n\n[後ろにURL https://example.com/after] [https://example.com/before 先にURL] [tag]'));
+    await storage.refresh(); await visibility('public');
+    const post = remote.index.articles[0]; const body = decode(remote.files.get(post.markdownPath)!);
+    expect(body).toContain('[後ろにURL](https://example.com/after)'); expect(body).toContain('[先にURL](https://example.com/before)');
+    expect(post.tags).toEqual(['tag']);
+  });
   it('公開記事の編集と改名を反映し、同じ内容の再同期ではコミットを作らない', async () => {
     const { storage, remote, publisher, path, visibility } = await setup(); await visibility('public');
     await publisher.sync(storage); expect(remote.commits).toHaveLength(1);

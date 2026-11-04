@@ -59,11 +59,15 @@ export function scanReferences(text: string): Reference[] {
     if (!value) continue;
     const before = text.slice(text.lastIndexOf('\n', from - 1) + 1, from);
     if (/^[ xX]$/.test(value) && /^\s*(?:[-+*]|\d+[.)])\s+$/.test(before)) continue;
-    const labeled = /^(https?:\/\/\S+)[ \t]+(.+)$/.exec(value);
+    const valueFrom = from + 1 + match[1].indexOf(value);
+    const labeled = /^(https?:\/\/\S+)[ \t]+(.+)$/i.exec(value);
+    const trailingUrl = /^(.+?)[ \t]+(https?:\/\/\S+)$/i.exec(value);
     if (labeled && isExternalUrl(labeled[1])) {
-      const contentFrom = from + 1 + match[1].lastIndexOf(labeled[2]);
+      const contentFrom = valueFrom + value.length - labeled[2].length;
       refs.push({ kind: 'url', value: labeled[1], label: labeled[2], contentFrom, contentTo: contentFrom + labeled[2].length, from, to });
-    } else if (isExternalUrl(value)) refs.push({ kind: 'url', value, contentFrom: from + 1, contentTo: to - 1, from, to });
+    } else if (trailingUrl && isExternalUrl(trailingUrl[2])) {
+      refs.push({ kind: 'url', value: trailingUrl[2], label: trailingUrl[1], contentFrom: valueFrom, contentTo: valueFrom + trailingUrl[1].length, from, to });
+    } else if (isExternalUrl(value)) refs.push({ kind: 'url', value, contentFrom: valueFrom, contentTo: valueFrom + value.length, from, to });
     else refs.push({ kind: 'tag', value, contentFrom: from + 1, contentTo: to - 1, from, to });
   }
   return refs.sort((a, b) => a.from - b.from);
