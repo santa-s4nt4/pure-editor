@@ -21,6 +21,9 @@ pub fn read_github_token() -> Result<String, String> {
 pub fn write_github_token(value: String) -> Result<(), String> {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
+        if read_github_token()? == value {
+            return Ok(());
+        }
         if value.is_empty() {
             return match security_framework::passwords::delete_generic_password(SERVICE, ACCOUNT) {
                 Ok(()) => Ok(()),
@@ -33,6 +36,9 @@ pub fn write_github_token(value: String) -> Result<(), String> {
     }
     #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     {
+        if read_github_token()? == value {
+            return Ok(());
+        }
         if value.is_empty() {
             Ok(())
         } else {

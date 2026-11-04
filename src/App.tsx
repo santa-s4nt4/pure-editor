@@ -147,7 +147,7 @@ export default function App() {
   }
   async function syncPublished() {
     const current = publisher;
-    if (!current) return;
+    if (!current || publishingPaused || disposed) return;
     setPublishStatus('公開先を更新しています');
     try { await current.sync(storage); if (current === publisher) setPublishStatus('公開先は最新です'); }
     catch (error) { if (current === publisher) setPublishStatus(`公開先の更新待ち：${error instanceof Error ? error.message : String(error)}`); throw error; }
@@ -497,7 +497,7 @@ export default function App() {
         setSyncStatus(next.syncEnabled ? '同期を待っています' : '同期はオフです');
         closePalette();
       }
-      connectPublisher();
+      connectPublisher(); publishingPaused = false;
       if (next.syncEnabled) void storage.sync();
       void syncPublished().catch(() => undefined);
       report('設定を保存しました。');
