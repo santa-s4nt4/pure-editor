@@ -9,8 +9,9 @@ on:
       runner:
         description: 'macOS の実行環境（割り当て待ちが長い場合は切り替え）'
         type: choice
-        default: macos-26
+        default: macos-15-intel
         options:
+          - macos-15-intel
           - macos-26
           - macos-15
 
@@ -24,7 +25,7 @@ permissions:
 
 jobs:
   build-and-release:
-    runs-on: ${{ inputs.runner || 'macos-26' }}
+    runs-on: ${{ inputs.runner || 'macos-15-intel' }}
     # 実行開始後の上限です。ランナーの割り当て待ちには適用されません。
     timeout-minutes: 45
     defaults:
@@ -36,7 +37,7 @@ jobs:
 
       - name: Show runner and Xcode versions
         run: |
-          test "$(uname -m)" = "arm64"
+          uname -m
           sw_vers
           xcodebuild -version
 
@@ -56,7 +57,7 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
           # 異なる macOS / SDK でコンパイルしたキャッシュを混ぜません。
-          shared-key: ${{ inputs.runner || 'macos-26' }}
+          shared-key: ${{ inputs.runner || 'macos-15-intel' }}
 
       - name: Install dependencies
         run: npm ci
@@ -73,13 +74,16 @@ jobs:
       # 1. macOS App (.app -> pure-macos.zip)
       # ==========================================
       - name: Build Tauri macOS App
-        run: npm run tauri build -- --bundles app --ci --config '{"build":{"beforeBuildCommand":""}}'
+        run: npm run tauri build -- --bundles app --target aarch64-apple-darwin --ci --config '{"build":{"beforeBuildCommand":""}}'
 
       - name: Ad-hoc Sign and Package macOS ZIP
         run: |
-          APP_PATH=$(find src-tauri/target/release/bundle/macos -maxdepth 1 -type d -name "*.app" -print -quit)
+          APP_PATH=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/macos -maxdepth 1 -type d -name "*.app" -print -quit)
           test -n "$APP_PATH"
           echo "Found macOS app at: $APP_PATH"
+          APP_EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_PATH/Contents/Info.plist")
+          lipo -verify_arch arm64 "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE"
+          lipo -archs "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE"
 
           # Apple Developer ID が不要なアドホック署名を付与
           codesign --force --deep --sign - "$APP_PATH"

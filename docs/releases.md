@@ -8,15 +8,17 @@
 
 1. GitHub の Actions → **Build and Release (macOS & iOS)** を開きます。
 2. **Run workflow** を選び、ブランチを `main` にします。
-3. `runner` で **macos-26** または **macos-15** を選び、実行します。
+3. `runner` で **macos-15-intel**、**macos-26**、**macos-15** のいずれか を選び、実行します。
 
-通常の main への push は `macos-26` を使います。どちらも Apple Silicon の標準ランナーです。別のイメージを選んでも即時に割り当てられる保証はありません。
+通常の main への push は `macos-15-intel` を使います。macOS arm64 ランナーの容量不足が確認されたため、Intel ホストから Apple Silicon 用の macOS アプリと iPhone 用 IPA を生成します。macOS の出力ターゲットは `aarch64-apple-darwin` に固定し、パッケージ前に `lipo` で arm64 を確認します。
+
+`macos-26` と `macos-15` は Apple Silicon の標準ランナーです。どのランナーも即時に割り当てられる保証はありません。
 
 古い実行の **Re-run jobs** は、その実行時のコミットとワークフローを使います。更新した設定や runner の選択を使う場合は、最新の main を指定して **Run workflow** から新しく実行してください。
 
 ## 実行開始後の流れ
 
-1. 実際の CPU・macOS・Xcode のバージョンをログに表示。
+1. 実際のホスト CPU・macOS・Xcode のバージョンをログに表示。
 2. Node.js / Rust の準備と依存キャッシュの復元。Rust キャッシュは runner イメージごとに分けます。
 3. `npm ci`、単体テスト、フロントエンドのビルドを1回実行。
 4. 同じフロントエンドを使って macOS と iOS を順にビルド。
