@@ -13,6 +13,14 @@ test('既存記事は非公開で、公開設定のある記事だけを絞り�
     }); db.close();
   });
   await page.reload(); await expect(page.getByRole('button', { name: '公開確認', exact: true })).toBeVisible();
+  const card = page.locator('.note-card').filter({ has: page.getByRole('button', { name: '公開確認', exact: true }) });
+  const icon = card.getByRole('img', { name: '公開', exact: true });
+  await expect(icon).toBeVisible();
+  await expect(card.locator('.note-tags')).toHaveText('確認タグ');
+  const iconBox = (await icon.boundingBox())!;
+  const tagBox = (await card.getByRole('button', { name: '確認タグ', exact: true }).boundingBox())!;
+  expect(Math.abs(iconBox.y + iconBox.height / 2 - tagBox.y - tagBox.height / 2)).toBeLessThanOrEqual(1);
+  expect(iconBox.width).toBeLessThanOrEqual(16);
   const filters = page.getByRole('group', { name: '記事の公開範囲' });
   await filters.getByRole('button', { name: '公開', exact: true }).click();
   await expect(page.locator('.note-title')).toHaveCount(1);

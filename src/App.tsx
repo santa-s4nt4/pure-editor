@@ -4,7 +4,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { EditorView } from '@codemirror/view';
 import { createEditor } from './lib/editor';
 import { isExternalUrl, noteTitle, pagePath, type Reference } from './lib/transformer';
-import { StorageManager, R2Backend, chooseFolder, createBackend, loadSettings, persistSettings, relocateImages, validateR2, mobile, native, type Note, type Settings } from './lib/storage';
+import { StorageManager, R2Backend, chooseFolder, createBackend, loadSettings, persistSettings, persistLastFile, relocateImages, safeRelativePath, validateR2, mobile, native, type Note, type Settings } from './lib/storage';
+import { workspaceChannel, workspaceLock } from './lib/workspace';
 import { scrollIndicator } from './lib/scrollbar';
 import { NavigationHistory, type Visit } from './lib/navigation';
 import { filenameTitle } from './lib/note-filenames';
@@ -16,12 +17,16 @@ import { createPaperClient } from './lib/paper-native';
 import type { PaperClient, PaperFile } from './lib/paper-client';
 import PaperSettings from './components/PaperSettings';
 import AnimatedWordmark from './components/AnimatedWordmark';
+import PublicationIcon from './components/PublicationIcon';
 import { ArticlePublisher, GitHubRepository, loadGithubToken, saveGithubToken, targetKey, validatePublishingTarget } from './lib/github-publisher';
 
 type PaletteAction = { id: string; label: string; detail: string; kind: 'note' | 'action'; run(): void | Promise<void> };
 const introduction = '# 余白から、はじめる。\n\n考えていることを、ひとつずつ。\n言葉にすると、少しだけ輪郭が見えてくる。\n\npure は、書くための静かな場所です。\n\n⌘ L でノートを探す。⌘ N で新しく書く。\n[思いついたこと] のように囲めば、タグになります。\n同じタグの文章を、まとめて見返せます。\n\n画像を置く。動画の URL を貼る。\n書いたものは、ふつうの Markdown として残ります。\n';
 
-export default function App() {
+export default function App(props: { initialArticle?: string } = {}) {
+  // A child keeps its own recovery journal, including across a webview reload.
+  const recoverySession = props.initialArticle ? sessionStorage.getItem('pure-recovery-session') || crypto.randomUUID() : '';
+  if (recoverySession) sessionStorage.setItem('pure-recovery-session', recoverySession);
   const [paperClient, setPaperClient] = createSignal<PaperClient>();
   const [paperConnected, setPaperConnected] = createSignal(false);
   const [paperStatus, setPaperStatus] = createSignal('未接続');
@@ -40,7 +45,7 @@ export default function App() {
   let publishingPaused = false;
   const [notes, setNotes] = createSignal<Note[]>([]);
   const [activePath, setActivePath] = createSignal('');
-  const [home, setHome] = createSignal(true);
+  const [home, setHome] = createSignal(!props.initialArticle);
   const currentArticle = createMemo(() => notes().find(note => note.path === activePath()));
   const articleIsPublic = createMemo(() => currentArticle()?.publication?.visibility === 'public');
   const [homeQuery, setHomeQuery] = createSignal('');
@@ -76,6 +81,7 @@ export default function App() {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
   let saveTask: Promise<void> = Promise.resolve();
+  let pendingSave: { storage: StorageManager; version: { text: string }; text: string; task: Promise<void> } | undefined;
   let navigationTask: Promise<void> = Promise.resolve();
   let dirty = false;
   let loadedVersion = { text: '' };
@@ -89,6 +95,7 @@ export default function App() {
   let pendingTravel: number | null = null;
   let clickTimer: ReturnType<typeof setTimeout> | undefined;
   let doubleClickDelay = 500;
+  let workspace: ReturnType<typeof workspaceChannel> | undefined;
   createEffect(() => {
     const theme = (palette() && screen() === 'settings' ? draft()?.theme : settings()?.theme) ?? 'auto';
     document.documentElement.dataset.theme = theme;
@@ -97,7 +104,7 @@ export default function App() {
 
   function currentVisit(): Visit {
     const selection = editor?.view.state.selection.main;
-    return home() ? { kind: 'home', tag: homeTag(), query: homeQuery(), scroll: homeScroller.scrollTop } : { kind: 'note', path: activePath(), anchor: selection?.anchor, head: selection?.head, scroll: editor?.view.scrollDOM.scrollTop };
+    return home() || !editor ? { kind: 'home', tag: homeTag(), query: homeQuery(), scroll: homeScroller.scrollTop } : { kind: 'note', path: activePath(), anchor: selection?.anchor, head: selection?.head, scroll: editor?.view.scrollDOM.scrollTop };
   }
   async function travel(direction: number) {
     if (navigatingHistory) { pendingTravel = direction; return; }
@@ -120,7 +127,7 @@ export default function App() {
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => setMessage(''), 7000);
   };
-  const journalKey = (path: string) => `pure-recovery:${settings()?.folder || 'browser'}:${path}`;
+  const journalKey = (path: string) => `pure-recovery:${settings()?.folder || 'browser'}:${path}${recoverySession ? `:${recoverySession}` : ''}`;
   const remember = (text: string) => {
     try { localStorage.setItem(journalKey(activePath()), text); }
     catch { report('一時保存領域がいっぱいです。⌘ S で保存してください。'); }
@@ -131,6 +138,7 @@ export default function App() {
     storage = manager;
     unlistenStorage = storage.onChange(event => {
       if (event.type === 'files') {
+        workspace?.post('files', settings()?.folder || 'browser');
         void reloadNotes().catch(error => report(String(error)));
         clearTimeout(publishTimer);
         if (publisher) setPublishStatus('公開同期を待っています');
@@ -150,9 +158,16 @@ export default function App() {
   }
   async function syncPublished() {
     const current = publisher;
+    const currentStorage = storage;
     if (!current || publishingPaused || disposed) return;
     setPublishStatus('公開先を更新しています');
-    try { await current.sync(storage); if (current === publisher) setPublishStatus('公開先は最新です'); }
+    try {
+      await workspaceLock(`pure-publish:${targetKey(current.remote.repository, current.remote.branch)}`, async () => {
+        if (current !== publisher || currentStorage !== storage || publishingPaused || disposed) return;
+        await currentStorage.reloadSharedState(); await current.sync(currentStorage);
+      });
+      if (current === publisher) setPublishStatus('公開先は最新です');
+    }
     catch (error) { if (current === publisher) setPublishStatus(`公開先の更新待ち：${error instanceof Error ? error.message : String(error)}`); throw error; }
   }
   async function changePublication(path: string, visibility: 'public' | 'private') {
@@ -176,8 +191,15 @@ export default function App() {
   async function reloadActiveAfterSync() {
     if (!editor || dirty || !activePath()) return;
     const current = editor;
-    const path = activePath();
+    const previousPath = activePath();
+    const path = storage.resolvePath(previousPath);
     const content = await storage.readNote(path);
+    if (current !== editor || activePath() !== previousPath || dirty) return;
+    const resolved = storage.resolvePath(path);
+    if (resolved !== previousPath) {
+      setActivePath(resolved); history.renamePaths(value => storage.resolvePath(value));
+      updateTitle(content ?? current.view.state.doc.toString());
+    }
     if (content === null && current === editor && !dirty) { await goHome(); return; }
     if (content !== null && current === editor && !dirty && current.view.state.doc.toString() !== content) {
       const head = Math.min(current.view.state.selection.main.head, content.length);
@@ -196,13 +218,14 @@ export default function App() {
     const text = editor.view.state.doc.toString();
     const currentStorage = storage;
     const version = loadedVersion;
+    if (pendingSave?.storage === currentStorage && pendingSave.version === version && pendingSave.text === text) { await pendingSave.task; return; }
     const key = journalKey(path);
     // 前の保存の失敗で、以後の保存を止めない。
     saveTask = saveTask.catch(() => undefined).then(async () => {
       const renamed = await currentStorage.saveNamedNote(path, text, version.text);
       if (activePath() === path && renamed !== path) {
         setActivePath(renamed); history.renamePaths(value => currentStorage.resolvePath(value));
-        if (settings()) { const next = { ...settings()!, lastFile: renamed }; setSettings(next); await persistSettings(next); }
+        if (settings()) { setSettings({ ...settings()!, lastFile: renamed }); await persistLastFile(renamed); }
         if (localStorage.getItem(key) === text) localStorage.removeItem(key);
         if (editor?.view.state.doc.toString() !== text) remember(editor!.view.state.doc.toString());
       }
@@ -210,7 +233,10 @@ export default function App() {
       if (editor?.view.state.doc.toString() === text && activePath() === renamed) dirty = false;
       if (localStorage.getItem(key) === text) localStorage.removeItem(key);
     });
-    await saveTask;
+    const pending = { storage: currentStorage, version, text, task: saveTask };
+    pendingSave = pending;
+    try { await pending.task; }
+    finally { if (pendingSave === pending) pendingSave = undefined; }
   }
   function autosave(text: string) {
     if (refreshing) return;
@@ -222,6 +248,7 @@ export default function App() {
   }
   function updateTitle(text: string) {
     const title = noteTitle(text, filenameTitle(activePath()) || '無題');
+    if (native && !mobile && activeTitle() !== title) void import('@tauri-apps/api/window').then(({ getCurrentWindow }) => getCurrentWindow().setTitle(title)).catch(error => report(String(error)));
     setActiveTitle(title); document.title = `${title} — pure`;
     if (!mobile) { setOutline(articleOutline(text)); measureOutline(); }
   }
@@ -266,6 +293,7 @@ export default function App() {
     const next = navigationTask.catch(() => undefined).then(async () => {
       await flush();
       const text = await storage.readNote(path);
+      path = storage.resolvePath(path);
       if (text === null) throw new Error('ノートが見つかりません。');
       if (!restore) history.push({ kind: 'note', path }, currentVisit());
       clearOutline?.(); clearOutline = undefined; editor?.destroy();
@@ -287,7 +315,7 @@ export default function App() {
         const current = editor;
         requestAnimationFrame(() => { if (editor === current) current.view.scrollDOM.scrollTop = restore.scroll ?? 0; });
       }
-      if (settings()) await persistSettings(settings()!);
+      if (settings()) await persistLastFile(path);
     });
     navigationTask = next;
     return next;
@@ -355,7 +383,10 @@ export default function App() {
     } catch (error) { report(String(error)); }
   }
   async function bindPaper(manager: StorageManager) {
-    const notebook = new PaperNotebook(manager.backend, paperClient() ?? null, () => void reloadNotes().catch(error => report(String(error))), status => {
+    const notebook = new PaperNotebook(manager.backend, paperClient() ?? null, () => {
+      workspace?.post('files', settings()?.folder || 'browser');
+      void reloadNotes().catch(error => report(String(error)));
+    }, status => {
       setPaperStatus(status);
       if (/失敗|変更があります|接続してください/.test(status)) report(status);
     });
@@ -399,6 +430,7 @@ export default function App() {
   async function openArticleWindow(path: string) {
     try {
       await flush(); path = storage.resolvePath(path);
+      if (!navigator.locks || typeof BroadcastChannel === 'undefined') throw new Error('複数ウィンドウの編集に必要な機能を利用できません。macOS を更新してください。');
       const url = `/?article=${encodeURIComponent(path)}`;
       if (!native) { window.open(url, '_blank', 'noopener,noreferrer'); return; }
       const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow');
@@ -508,6 +540,7 @@ export default function App() {
         closePalette();
       }
       connectPublisher(); publishingPaused = false;
+      workspace?.post('settings', next.folder || 'browser');
       if (next.syncEnabled) void storage.sync();
       void syncPublished().catch(() => undefined);
       report('設定を保存しました。');
@@ -535,6 +568,27 @@ export default function App() {
     let unlistenScale: (() => void) | undefined;
     let unlistenTrackpad: (() => void) | undefined;
     let nativeTrackpadReady = false;
+    let sharedTimer: ReturnType<typeof setTimeout> | undefined;
+    let sharedTask = Promise.resolve();
+    let sharedSettingsChanged = false;
+    workspace = workspaceChannel(change => {
+      if (!ready() || disposed) return;
+      if (change.kind === 'settings') sharedSettingsChanged = true;
+      clearTimeout(sharedTimer);
+      sharedTimer = setTimeout(() => {
+        sharedTask = sharedTask.catch(() => undefined).then(async () => {
+          if (disposed) return;
+          if (sharedSettingsChanged) {
+            sharedSettingsChanged = false; await flush();
+            sessionStorage.setItem('pure-restore-visit', JSON.stringify(currentVisit()));
+            location.reload(); return;
+          }
+          if (change.folder !== (settings()?.folder || 'browser')) return;
+          await storage.reloadSharedState(); await reloadNotes(); await reloadActiveAfterSync();
+          if (!publishingPaused) { clearTimeout(publishTimer); publishTimer = setTimeout(() => void syncPublished().catch(() => undefined), 1500); }
+        }).catch(error => report(String(error)));
+      }, 40);
+    });
     const boot = async () => {
       try {
         const currentSettings = await loadSettings();
@@ -555,7 +609,7 @@ export default function App() {
           const recovered = localStorage.getItem(oldKey);
           if (recovered !== null && localStorage.getItem(newKey) === null) { localStorage.setItem(newKey, recovered); localStorage.removeItem(oldKey); }
         }
-        if (currentSettings.lastFile) { currentSettings.lastFile = manager.resolvePath(currentSettings.lastFile); await persistSettings(currentSettings); }
+        if (currentSettings.lastFile) { currentSettings.lastFile = manager.resolvePath(currentSettings.lastFile); await persistLastFile(currentSettings.lastFile); }
         await reloadNotes();
         if (!notes().length && !manager.hasHistory) {
           const path = await manager.createNote('はじめに');
@@ -566,7 +620,19 @@ export default function App() {
         setReady(true);
         void syncPublished().catch(() => undefined);
         if (paperConnected()) void paperNotebook?.refresh().then(() => reloadActiveAfterSync()).catch(error => report(String(error)));
-        document.title = 'pure';
+        const restore = sessionStorage.getItem('pure-restore-visit');
+        sessionStorage.removeItem('pure-restore-visit');
+        if (restore) {
+          const visit = JSON.parse(restore) as Visit;
+          const path = visit.path ? manager.resolvePath(safeRelativePath(visit.path)) : '';
+          if (visit.kind === 'note' && notes().some(note => note.path === path)) await openNote(path, visit);
+          else await goHome(visit.tag ?? '', visit.kind === 'home' ? visit : undefined);
+        } else if (props.initialArticle) {
+          if (!navigator.locks || typeof BroadcastChannel === 'undefined') throw new Error('複数ウィンドウの編集に必要な機能を利用できません。macOS を更新してください。');
+          const path = safeRelativePath(props.initialArticle);
+          if (!/\.md$/i.test(path) && !isPaperPath(path)) throw new Error('記事のパスが不正です。');
+          await openNote(manager.resolvePath(path));
+        } else document.title = 'pure';
         if (native && !mobile) {
           const { getCurrentWindow } = await import('@tauri-apps/api/window');
           const win = getCurrentWindow();
@@ -731,6 +797,7 @@ export default function App() {
     const retry = setInterval(() => { if (ready() && document.visibilityState === 'visible' && navigator.onLine) { void storage.sync(); void paperNotebook?.sync(); void syncPublished().catch(() => undefined); } }, 60_000);
     onCleanup(() => {
       disposed = true; clearTimeout(hintTimer); clearTimeout(clickTimer); clearTimeout(timer); clearTimeout(toastTimer); clearInterval(retry);
+      clearTimeout(sharedTimer); workspace?.close();
       paper.removeEventListener('touchstart', touchstart, true); paper.removeEventListener('touchmove', touchmove, true); paper.removeEventListener('touchend', touchend, true); paper.removeEventListener('touchcancel', cancelTouch, true); paper.removeEventListener('click', click, true);
       paper.removeEventListener('wheel', wheel, true); paper.removeEventListener('drop', paperDrop, true); paper.removeEventListener('dragover', paperDrag);
       window.removeEventListener('keydown', keydown, true); document.removeEventListener('visibilitychange', visibility);
@@ -749,7 +816,15 @@ export default function App() {
         <div class="publication-filters" role="group" aria-label="記事の公開範囲"><For each={[{ value: 'all' as const, label: 'すべて' }, { value: 'private' as const, label: '非公開' }, { value: 'public' as const, label: '公開' }]}>{filter => <button type="button" aria-pressed={visibilityFilter() === filter.value} onClick={() => setVisibilityFilter(filter.value)}>{filter.label}</button>}</For></div>
         <div class="note-grid"><For each={homeNotes()}>{note => <article class="note-card" data-note-path={note.path} classList={{ 'is-swiping': swipedRow()?.path === note.path && swipedRow()!.dragging, 'is-revealed': swipedRow()?.path === note.path && swipedRow()!.offset < 0, 'is-delete-ready': swipedRow()?.path === note.path && swipedRow()!.full }} style={{ '--row-offset': `${swipedRow()?.path === note.path ? swipedRow()!.offset : 0}px` }}>
           <Show when={mobile && !isPaperPath(note.path)}><button class="note-delete" type="button" aria-label={`${note.title}を削除`} tabindex={swipedRow()?.path === note.path ? 0 : -1} disabled={busy()} onClick={() => void deleteArticle(note.path)}>削除</button></Show>
-          <div class="note-card-content"><button class="note-title" type="button" disabled={!ready() || busy()} onClick={event => activateNote(event, note.path)} onDblClick={() => { if (!mobile) { clearTimeout(clickTimer); void openArticleWindow(note.path); } }}>{note.title}</button><div class="note-tags"><Show when={note.publication?.visibility === 'public'}><span class="publication-label" title={publishStatus()}>{publishStatus() === '公開先は最新です' && note.publication?.repository.toLowerCase() === settings()?.githubRepository?.toLowerCase() && note.publication?.branch === (settings()?.githubBranch || 'main') ? '公開' : '公開設定あり'}</span></Show><Show when={note.publication?.visibility === 'private' && publishStatus() !== '公開先は最新です'}><span class="publication-label" title={publishStatus()}>取り下げ設定あり</span></Show><For each={note.tags.slice(0, 3)}>{tag => <button type="button" onClick={() => void followReference({ kind: 'tag', value: tag, from: 0, to: 0 })}>{tag}</button>}</For><Show when={note.tags.length > 3}><span class="tags-more" title={note.tags.slice(3).join('、')}>…</span></Show></div></div>
+          <div class="note-card-content">
+            <button class="note-title" type="button" disabled={!ready() || busy()} onClick={event => activateNote(event, note.path)} onDblClick={() => { if (!mobile) { clearTimeout(clickTimer); void openArticleWindow(note.path); } }}>{note.title}</button>
+            <div class="note-tags">
+              <Show when={note.publication?.visibility === 'public'}><PublicationIcon label="公開" status={publishStatus()} /></Show>
+              <Show when={note.publication?.visibility === 'private' && publishStatus() !== '公開先は最新です'}><PublicationIcon pending label="取り下げ設定あり" status={publishStatus()} /></Show>
+              <For each={note.tags.slice(0, 3)}>{tag => <button type="button" onClick={() => void followReference({ kind: 'tag', value: tag, from: 0, to: 0 })}>{tag}</button>}</For>
+              <Show when={note.tags.length > 3}><span class="tags-more" title={note.tags.slice(3).join('、')}>…</span></Show>
+            </div>
+          </div>
         </article>}</For></div>
         <Show when={ready() && homeNotes().length === 0}><p class="home-empty">{homeQuery() ? '見つかりませんでした。' : 'まだ、何も書かれていません。'}</p></Show>
       </div>
