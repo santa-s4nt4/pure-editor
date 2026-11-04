@@ -10,6 +10,8 @@ const columns = (prefix: string) => [...prefix].reduce((column, character) => ch
 export function normalizeMarkdownLayout(text: string): string {
   if (!text.includes('\n') || !/^[ \t]*(?:[-+*]|\d{1,9}[.)])[ \t]+/m.test(text)) return text;
   const literals: { from: number; to: number }[] = [];
+  const frontmatter = /^(?:\uFEFF)?---[ \t]*\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/.exec(text);
+  if (frontmatter) literals.push({ from: 0, to: frontmatter[0].length });
   parser.parse(text).iterate({ enter(node) {
     if (literalBlocks.has(node.name)) { literals.push({ from: node.from, to: node.to }); return false; }
   } });

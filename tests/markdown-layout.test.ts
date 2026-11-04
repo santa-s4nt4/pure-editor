@@ -36,6 +36,11 @@ describe('Markdown のリスト境界', () => {
     expect(normalizeMarkdownLayout('- parent\n  2. child\n  3. next')).toBe('- parent\n\n  2. child\n  3. next');
   });
 
+  it('先頭のメタ情報では、複数行の値やリストを変更しない', () => {
+    const frontmatter = '---\nsummary: |\n  - literal\nnext: value\n---\n';
+    expect(normalizeMarkdownLayout(frontmatter + '\n- item\n2025')).toBe(frontmatter + '\n- item\n\n2025');
+  });
+
   it('改行コードと末尾改行を維持し、URL 変換と一緒に保存する', () => {
     expect(normalizeMarkdownLayout('- item\r\n2025.1\r\n')).toBe('- item\r\n\r\n2025.1\r\n');
     expect(toMarkdown('- [https://example.com label]\n2025.1')).toBe('- [label](https://example.com)\n\n2025.1');
