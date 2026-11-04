@@ -49,9 +49,9 @@ test('角括弧タグは同じタグの記事一覧へ移動し、履歴で戻�
   await page.locator('.cm-hashtag').click();
   await expect(page.locator('.home-heading h1')).toHaveText('共通タグ');
   await expect(page.locator('.note-title')).toHaveCount(2);
-  await page.keyboard.press('Meta+ArrowLeft');
+  await page.keyboard.press('Meta+Shift+ArrowLeft');
   await expect(page).toHaveTitle('タグ記事B — pure');
-  await page.keyboard.press('Meta+ArrowRight');
+  await page.keyboard.press('Meta+Shift+ArrowRight');
   await expect(page.locator('.home-heading h1')).toHaveText('共通タグ');
 });
 
@@ -253,6 +253,7 @@ test('ライト・ダーク・自動を切り替え、設定を保存して再�
   await page.getByRole('radio', { name: 'ダーク', exact: true }).check();
   await expect.poll(() => page.locator('html').evaluate(element => getComputedStyle(element).backgroundColor)).toBe('rgb(70, 71, 75)');
   await page.getByRole('button', { name: '設定を保存' }).click();
+  await expect(page.getByRole('dialog')).not.toBeVisible();
   await page.reload();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await page.emulateMedia({ colorScheme: 'light' });
@@ -391,7 +392,7 @@ test('箇条書きの先頭に画像をドロップし、順序とリストを�
   await expect.poll(() => page.locator('.cm-embed-image img').evaluateAll(elements => elements.map(element => (element as HTMLImageElement).naturalWidth))).toEqual([24, 48]);
 });
 
-test('ダブルクリックでトップを残したまま閲覧ウィンドウを開く', async ({ page, context, isMobile }) => {
+test('別ウィンドウでも同じ編集画面で保存・改名し、トップと元の編集画面にも反映する', async ({ page, context, isMobile }) => {
   test.skip(isMobile, 'Mac の複数ウィンドウ操作');
   await newNote(page, isMobile, '別窓テスト');
   const editor = page.getByRole('textbox', { name: 'ノート本文' });
@@ -401,10 +402,69 @@ test('ダブルクリックでトップを残したまま閲覧ウィンドウ�
   const childPromise = context.waitForEvent('page');
   await page.getByRole('button', { name: '改名した記事', exact: true }).dblclick();
   const child = await childPromise;
-  await expect(child.getByRole('main', { name: '記事の閲覧' })).toBeVisible();
-  await expect(child.locator('.cm-content')).toContainText('別ウィンドウの本文です。');
-  await expect(child.locator('.cm-content')).toHaveAttribute('contenteditable', 'false');
+  const childEditor = child.getByRole('textbox', { name: 'ノート本文' });
+  await expect(childEditor).toContainText('別ウィンドウの本文です。');
+  await expect(childEditor).toHaveAttribute('contenteditable', 'true');
   await expect(page.getByRole('region', { name: '記事一覧' })).toBeVisible();
+  await childEditor.fill('# 別窓で変更\n\n## 見出し\n\n編集した本文です。\n[同じタグ]');
+  await childEditor.press('Meta+s');
+  await expect(page.getByRole('button', { name: '別窓で変更', exact: true })).toBeVisible();
+  await expect(child.getByRole('navigation', { name: '記事の目次', includeHidden: true })).toBeAttached();
+  await child.getByRole('button', { name: 'ノートを開く', exact: true }).click();
+  await expect(child.getByRole('switch', { name: 'この記事を公開' })).toBeVisible();
+  await child.getByRole('button', { name: '閉じる', exact: true }).click();
+  await page.getByRole('button', { name: '別窓で変更', exact: true }).click();
+  await expect(editor).toContainText('編集した本文です。');
+  await childEditor.fill('# 別窓で再変更\n\n編集を反映しました。'); await childEditor.press('Meta+s');
+  await expect(editor).toContainText('編集を反映しました。');
+  await expect(page).toHaveTitle('別窓で再変更 — pure');
+  await child.reload();
+  await expect(childEditor).toContainText('編集を反映しました。');
+  await page.close();
+  await childEditor.fill('# 別窓で再変更\n\nメインを閉じても保存できます。'); await childEditor.press('Meta+s');
+  await expect(child.getByRole('status')).toContainText('保存しました');
+  await child.reload(); await expect(childEditor).toContainText('メインを閉じても保存できます。');
+  await child.close();
+});
+
+test('複数ウィンドウの未保存の本文を一時保存から混ぜない', async ({ page, context, isMobile }) => {
+  test.skip(isMobile, 'Mac の複数ウィンドウ操作');
+  await newNote(page, isMobile, '同時編集');
+  const editor = page.getByRole('textbox', { name: 'ノート本文' });
+  await editor.press('Meta+s');
+  await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
+  const childPromise = context.waitForEvent('page');
+  await page.getByRole('button', { name: '同時編集', exact: true }).dblclick(); const child = await childPromise;
+  const childEditor = child.getByRole('textbox', { name: 'ノート本文' }); await expect(childEditor).toHaveAttribute('contenteditable', 'true');
+  await page.getByRole('button', { name: '同時編集', exact: true }).click();
+  await editor.fill('# 同時編集\n\nメインの未保存');
+  await childEditor.fill('# 同時編集\n\n別窓の未保存');
+  await expect(editor).toContainText('メインの未保存'); await expect(childEditor).toContainText('別窓の未保存');
+  const journals = await page.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith('pure-recovery:')).map(key => localStorage.getItem(key)));
+  expect(journals.some(text => text?.includes('メインの未保存'))).toBe(true);
+  expect(journals.some(text => text?.includes('別窓の未保存'))).toBe(true);
+  await editor.press('Meta+s'); await childEditor.press('Meta+s');
+  await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
+  await expect(page.locator('.note-title')).toHaveCount(3); // introduction, current article, conflict copy
+  await child.close();
+});
+
+test('別ウィンドウの外観設定を反映するときも、開いていた記事に戻る', async ({ page, context, isMobile }) => {
+  test.skip(isMobile, 'Mac の複数ウィンドウ操作');
+  await newNote(page, isMobile, '設定を共有');
+  const editor = page.getByRole('textbox', { name: 'ノート本文' });
+  await editor.press('Meta+s'); await expect(page.getByRole('status')).toContainText('保存しました');
+  await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
+  const childPromise = context.waitForEvent('page');
+  await page.getByRole('button', { name: '設定を共有', exact: true }).dblclick(); const child = await childPromise;
+  await expect(child.getByRole('textbox', { name: 'ノート本文' })).toBeVisible();
+  await page.getByRole('button', { name: '設定を共有', exact: true }).click();
+  await expect(editor).toBeVisible();
+  await child.keyboard.press('Meta+,'); await child.getByRole('radio', { name: 'ダーク', exact: true }).check();
+  await child.getByRole('button', { name: '設定を保存', exact: true }).click();
+  await expect(child.getByRole('dialog')).not.toBeVisible();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await expect(editor).toContainText('設定を共有'); await expect(page).toHaveTitle('設定を共有 — pure');
   await child.close();
 });
 

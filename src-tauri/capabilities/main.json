@@ -1,14 +1,15 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "pure のローカルノートと R2 同期。外部 iframe には権限を付与しません。",
-  "windows": ["main"],
+  "description": "pure のメイン画面・記事編集ウィンドウ。外部 iframe には権限を付与しません。",
+  "windows": ["main", "article-*"],
   "permissions": [
     "core:default",
     "core:webview:allow-create-webview-window",
     "core:window:allow-destroy",
     "core:window:allow-start-dragging",
     "core:window:allow-set-theme",
+    "core:window:allow-set-title",
     "dialog:allow-open",
     "clipboard-manager:allow-read-image",
     "core:image:allow-size",
