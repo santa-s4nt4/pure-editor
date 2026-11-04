@@ -701,7 +701,7 @@ export default function App() {
     <dialog class="palette" ref={dialog} aria-label={screen() === 'notes' ? 'ノートとコマンド' : '設定'} onCancel={event => { event.preventDefault(); if (!busy()) closePalette(); }} onClick={event => { if (event.target === dialog && !busy()) closePalette(); }}>
       <div class="palette-inner">
         <Show when={screen() === 'notes'} fallback={<form class="settings" onSubmit={saveSettings}>
-          <div class="palette-heading"><button type="button" disabled={busy()} onClick={() => { setScreen('notes'); setSettingsError(''); }}>← ノートへ</button><button class="quiet-button" type="button" disabled={busy()} aria-label="閉じる" onClick={closePalette}>閉じる</button></div>
+          <div class="palette-heading"><button type="button" disabled={busy()} onClick={() => { setScreen('notes'); setSettingsError(''); }}>← ノートへ</button><div class="palette-top-actions"><button class="quiet-button" type="button" disabled={busy()} aria-label="閉じる" onClick={closePalette}>閉じる</button><Show when={mobile && (!home() || homeTag())}><button class="palette-home" type="button" disabled={busy()} aria-label="トップページに戻る" onClick={() => void goHome().catch(error => report(String(error)))}>ホーム</button></Show></div></div>
           <fieldset disabled={busy()}><legend>外観</legend>
             <div class="theme-options" role="radiogroup" aria-label="外観"><For each={[{ value: 'light', label: 'ライト' }, { value: 'dark', label: 'ダーク' }, { value: 'auto', label: '自動' }]}>{option => <label><input type="radio" name="theme" value={option.value} checked={(draft()?.theme ?? 'auto') === option.value} onChange={() => updateDraft('theme', option.value)} />{option.label}</label>}</For></div>
           </fieldset>
@@ -734,14 +734,14 @@ export default function App() {
             if (event.isComposing) return;
             if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); const length = actions().length; setSelected(index => (index + (event.key === 'ArrowDown' ? 1 : -1) + length) % length); }
             if (event.key === 'Enter') { event.preventDefault(); void run(actions()[selected()]); }
-          }} /><button class="escape-key" type="button" aria-label="閉じる" onClick={closePalette}>esc</button></div>
+          }} /><div class="palette-top-actions"><button class="escape-key" type="button" aria-label="閉じる" onClick={closePalette}>{mobile ? '閉じる' : 'esc'}</button><Show when={mobile && (!home() || homeTag())}><button class="palette-home" type="button" disabled={busy()} aria-label="トップページに戻る" onClick={() => void goHome().catch(error => report(String(error)))}>ホーム</button></Show></div></div>
           <div class="palette-results" id="note-options" role="listbox" aria-label="ノートとコマンド" aria-busy={busy()}>
             <Show when={filtered().length === 0 && query()}><p class="empty-result">まだ、ここには何もありません。</p></Show>
             <For each={actions()}>{(action, index) => <button type="button" role="option" id={`option-${index()}`} aria-selected={selected() === index()} class="palette-option" classList={{ 'is-action': action.kind === 'action', 'is-current': action.id === activePath() }} disabled={busy()} onPointerMove={() => setSelected(index())} onClick={() => void run(action)}>
               <span class="option-name">{action.label}</span><span class="option-detail">{action.detail}</span><span class="option-enter" aria-hidden="true">↵</span>
             </button>}</For>
           </div>
-          <div class="palette-footer"><Show when={mobile && (!home() || homeTag())} fallback={<span>pure</span>}><button class="palette-home" type="button" disabled={busy()} onClick={() => void goHome().catch(error => report(String(error)))}>トップページに戻る</button></Show><span>↑ ↓ 選ぶ <span class="footer-space">↵ 開く</span></span></div>
+          <div class="palette-footer"><span>pure</span><span>↑ ↓ 選ぶ <span class="footer-space">↵ 開く</span></span></div>
         </Show>
       </div>
     </dialog>

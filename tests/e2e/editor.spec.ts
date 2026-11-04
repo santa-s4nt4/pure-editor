@@ -540,6 +540,22 @@ test('iPhoneは画面端のスワイプで履歴を往復し、縦スクロー�
   await expect.poll(() => page.locator('.cm-scroller').evaluate(element => element.scrollTop)).toBeGreaterThan(0);
 });
 
+test('iPhoneのホーム操作は⋯の右上にあり、設定画面からも戻れる', async ({ page, isMobile }) => {
+  test.skip(!isMobile, 'iPhone のメニュー');
+  await newNote(page, isMobile, 'ホームの位置');
+  await palette(page, isMobile);
+  const dialog = page.getByRole('dialog'); const home = dialog.getByRole('button', { name: 'トップページに戻る', exact: true });
+  const bounds = await dialog.boundingBox(); const button = await home.boundingBox();
+  expect(button!.x).toBeGreaterThan(bounds!.x + bounds!.width / 2);
+  expect(button!.y).toBeLessThan(bounds!.y + 90);
+  await expect(dialog.locator('.palette-footer .palette-home')).toHaveCount(0);
+  await home.tap(); await expect(page.getByRole('region', { name: '記事一覧' })).toBeVisible();
+  await page.getByRole('button', { name: 'ホームの位置', exact: true }).tap();
+  await palette(page, isMobile); await dialog.getByRole('option', { name: /設定 保存する場所/ }).click();
+  await dialog.getByRole('button', { name: 'トップページに戻る', exact: true }).tap();
+  await expect(page.getByRole('region', { name: '記事一覧' })).toBeVisible(); await expect(dialog).not.toBeVisible();
+});
+
 test('iPhoneのトップで左スワイプ削除と取り消しができ、トップに留まる', async ({ page, isMobile }) => {
   test.skip(!isMobile, 'iPhone のスワイプ削除');
   await newNote(page, isMobile, '削除しない記事'); await newNote(page, isMobile, '削除する記事');
