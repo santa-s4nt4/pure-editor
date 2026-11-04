@@ -29,12 +29,12 @@ test('既存記事は非公開で、公開設定のある記事だけを絞り�
   await expect(page.getByRole('switch', { name: 'この記事を公開' })).toHaveAttribute('aria-checked', 'true');
 });
 
-test('⋯はMacの左上・iPhoneの右下にあり、記事の公開スイッチと削除を操作できる', async ({ page, isMobile }) => {
+test('⋯はMacの右上・iPhoneの右下にあり、記事の公開スイッチと削除を操作できる', async ({ page, isMobile }) => {
   await page.goto('/'); await expect(page.locator('.writing-surface')).toHaveAttribute('aria-busy', 'false');
   const trigger = page.getByRole('button', { name: 'ノートを開く', exact: true });
   const bounds = await trigger.boundingBox();
   if (isMobile) { const size = page.viewportSize()!; expect(size.width - bounds!.x - bounds!.width).toBeLessThanOrEqual(20); expect(size.height - bounds!.y - bounds!.height).toBeLessThanOrEqual(20); }
-  else { expect(bounds!.x).toBeLessThan(120); expect(bounds!.y).toBeLessThan(40); }
+  else { const size = page.viewportSize()!; expect(size.width - bounds!.x - bounds!.width).toBeLessThanOrEqual(20); expect(bounds!.y).toBeLessThan(40); }
   await trigger.click();
   await expect(page.getByRole('switch', { name: 'この記事を公開' })).toHaveCount(0);
   await page.getByRole('combobox').fill('メニューで操作'); await page.getByRole('combobox').press('Enter');

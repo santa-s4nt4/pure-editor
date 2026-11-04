@@ -87,15 +87,15 @@ button:disabled { cursor: wait; opacity: 0.5; }
 .cm-task-checkbox:checked::after { content: ''; position: absolute; inset-inline-start: 50%; inset-block-start: 50%; inline-size: 0.22rem; block-size: 0.4rem; border-inline-end: 0.0625rem solid var(--text-faint); border-block-end: 0.0625rem solid var(--text-faint); transform: translate(-50%, -60%) rotate(45deg); }
 :is(.cm-embed-video, .cm-embed-image).is-list { position: relative; margin-inline-start: var(--list-indent, 1.5em); inline-size: calc(100% - var(--list-indent, 1.5em)); }
 :is(.cm-embed-video, .cm-embed-image).is-list:not(.has-source)::before { inset-inline-start: calc(-1.5em + (var(--checkbox-size) - var(--bullet-size)) / 2); inset-block-start: calc(var(--embed-gap) + 0.5lh - var(--bullet-size) / 2); }
-/* Beside the macOS traffic lights, outside the window's drag region. */
+/* Keep desktop article controls at the upper-right window edge. */
 .palette-trigger {
   display: grid; place-items: center; position: fixed; z-index: 4;
-  inset-inline-start: .65rem; inset-block-start: .25rem;
+  inset-inline-end: .65rem; inset-block-start: .25rem;
   inline-size: 2.25rem; block-size: 2rem; padding: 0;
   color: var(--text-muted); background: var(--paper); border-radius: var(--control-radius);
   font-size: 1.5rem; letter-spacing: 0.05em;
 }
-.palette-trigger.is-native-desktop { inset-inline-start: 5.25rem; inset-block-start: .1rem; }
+.palette-trigger.is-native-desktop { inset-block-start: .1rem; }
 .palette-trigger:hover { background: var(--surface-hover); }
 @media (pointer: coarse) {
   .palette-trigger {
