@@ -241,7 +241,9 @@ function mediaExtension(storage: StorageManager): Extension {
         const indent = /^\s*/.exec(line.text)![0].length;
         const position = line.from + task[1].length + 1;
         decorations.push({ from: line.from + indent, to: line.from + task[0].length, decoration: Decoration.replace({ widget: new CheckboxWidget(task[2].toLowerCase() === 'x', position) }) });
-        if (task[2].toLowerCase() === 'x') decorations.push({ from: line.from, to: line.from, decoration: Decoration.line({ class: 'cm-task-done' }) });
+        if (task[2].toLowerCase() === 'x' && task[0].length < line.length) {
+          decorations.push({ from: line.from + task[0].length, to: line.to, decoration: Decoration.mark({ class: 'cm-task-done' }) });
+        }
       } else if (!media || active) {
         const bullet = /^(\s*)[-+*]\s+/.exec(line.text);
         if (bullet) decorations.push({ from: line.from + bullet[1].length, to: line.from + bullet[0].length, decoration: Decoration.replace({ widget: new BulletWidget() }) });

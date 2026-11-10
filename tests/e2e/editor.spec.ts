@@ -215,6 +215,24 @@ test('Tab のインデント、横線、チェックボックスと完了表示'
   await expect(page.getByRole('checkbox', { name: '完了にする' })).toBeVisible();
 });
 
+test('完了タスクの取り消し線はインデントとチェックボックスを含まない', async ({ page, isMobile }) => {
+  await newNote(page, isMobile, '完了タスク');
+  const editor = page.getByRole('textbox', { name: 'ノート本文' });
+  const longText = '折り返しても本文だけに取り消し線を表示する。'.repeat(15);
+  await editor.fill(`# 完了タスク\n- [x] 親タスク\n   - [x] 子タスク\n\t- [x] ${longText}\n   - [x] \n   - [ ] 未完了`);
+  await expect(page.locator('.cm-task-done')).toHaveText(['親タスク', '子タスク', longText]);
+  await expect(page.locator('.cm-line.cm-task-done')).toHaveCount(0);
+  await expect(page.locator('.cm-task-done .cm-task-prefix')).toHaveCount(0);
+  const decorations = await page.locator('.cm-task-prefix').evaluateAll(elements => elements.map(element => {
+    const line = element.closest('.cm-line')!;
+    return [getComputedStyle(line).textDecorationLine, getComputedStyle(element).textDecorationLine];
+  }));
+  expect(decorations).toHaveLength(5);
+  expect(decorations.every(values => values.every(value => value === 'none'))).toBe(true);
+  await page.getByRole('checkbox', { name: '完了を取り消す' }).nth(1).click();
+  await expect(page.locator('.cm-task-done')).toHaveText(['親タスク', longText]);
+});
+
 test('角括弧の自動補完と、タグ・URL の灰色表示、最大3タグ', async ({ page, isMobile }) => {
   await expect(page.getByRole('button', { name: '新しい記事', exact: true })).toHaveCount(0);
   await newNote(page, isMobile, '表示');
