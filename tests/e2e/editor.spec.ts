@@ -133,6 +133,40 @@ test('Cmd N ですぐに新規記事、Cmd Shift Delete で削除して復元で
   await expect(editor).toContainText('すぐに書く');
 });
 
+test('削除前に始まった一覧の読み込みが遅れても、削除済みの記事を再表示しない', async ({ page, isMobile }) => {
+  await newNote(page, isMobile, '一覧更新中に削除');
+  await page.getByRole('textbox', { name: 'ノート本文' }).press('Meta+s');
+  await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
+  await page.evaluate(async () => {
+    const modulePath = '/src/lib/storage.ts'; const { StorageManager } = await import(modulePath);
+    const list = StorageManager.prototype.listNotes;
+    let pause = true;
+    StorageManager.prototype.listNotes = async function () {
+      const notes = await list.call(this);
+      if (pause) {
+        pause = false;
+        await new Promise<void>(resolve => { (window as any).releaseNotes = resolve; });
+      }
+      return notes;
+    };
+    const channel = new BroadcastChannel('pure-workspace');
+    channel.postMessage({ kind: 'files', folder: 'browser' }); channel.close();
+  });
+  await expect.poll(() => page.evaluate(() => typeof (window as any).releaseNotes)).toBe('function');
+  await page.getByRole('button', { name: '一覧更新中に削除', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: 'ノート本文' })).toBeVisible();
+  await page.getByRole('button', { name: 'ノートを開く', exact: true }).click();
+  await page.getByRole('button', { name: 'この記事を削除', exact: true }).click();
+  await expect(page.getByRole('button', { name: '一覧更新中に削除', exact: true })).toHaveCount(0);
+  await page.evaluate(() => (window as any).releaseNotes());
+  // Let the suspended reload finish and its UI update render.
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await expect(page.getByRole('button', { name: '一覧更新中に削除', exact: true })).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator('.writing-surface')).toHaveAttribute('aria-busy', 'false');
+  await expect(page.getByRole('button', { name: '一覧更新中に削除', exact: true })).toHaveCount(0);
+});
+
 test('箇条書きの YouTube と Vimeo は URL を隠し、カーソル移動で表示する', async ({ page, isMobile }) => {
   await newNote(page, isMobile, '動画のリスト');
   const editor = page.getByRole('textbox', { name: 'ノート本文' });

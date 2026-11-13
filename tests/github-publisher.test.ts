@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ArticlePublisher, GitHubChanged, GitHubRepository, emptyPublicIndex, parsePublicIndex, validatePublishingTarget } from '../src/lib/github-publisher';
-import { StorageManager, type LocalBackend } from '../src/lib/storage';
+import { StorageManager, SyncConflict, sha256, type LocalBackend, type RemoteBackend } from '../src/lib/storage';
 import { noteId } from '../src/lib/note-filenames';
 import { publicationDocument } from '../src/lib/publication';
 const encode = (text: string) => new TextEncoder().encode(text);
@@ -11,6 +11,15 @@ class Files implements LocalBackend {
   async write(path: string, bytes: Uint8Array) { this.files.set(path, bytes); }
   async remove(path: string) { this.files.delete(path); }
   async list() { return [...this.files.keys()].filter(path => !path.startsWith('.') && /\.md$|^assets\//.test(path)).map(path => ({ path, updatedAt: Date.now() })); }
+}
+class SyncRemote implements RemoteBackend {
+  objects = new Map<string, { bytes: Uint8Array; etag: string }>();
+  async get(path: string) { return this.objects.get(path) ?? null; }
+  async put(path: string, bytes: Uint8Array, condition?: string | null) {
+    const current = this.objects.get(path);
+    if (condition === null && current || condition && current?.etag !== condition) throw new SyncConflict();
+    this.objects.set(path, { bytes: bytes.slice(), etag: await sha256(bytes) });
+  }
 }
 class Repository extends GitHubRepository {
   index = emptyPublicIndex(); files = new Map<string, Uint8Array>(); commits: string[][] = []; beforeCommit: (() => Promise<void>) | undefined;
@@ -68,6 +77,43 @@ describe('GitHub 記事公開', () => {
     const renamed = await storage.saveNamedNote(path, '# 変更したタイトル\n\n本文'); await publisher.sync(storage);
     expect(remote.index.articles[0].id).toBe(noteId(path)); expect(remote.index.articles[0].title).toBe('変更したタイトル');
     expect(remote.index.articles[0].markdownPath).toContain(renamed); expect(remote.files.has(old)).toBe(false);
+  });
+  it('公開内容が同じなら、公開側の日時が新しくてもエラーや追加コミットにしない', async () => {
+    const { storage, remote, publisher, visibility } = await setup(); await visibility('public');
+    remote.index.articles[0].updatedAt += 60_000;
+    await publisher.sync(storage); expect(remote.commits).toHaveLength(1);
+  });
+  it('本文が異なる古い記事では、新しい公開版の上書きを防ぐ', async () => {
+    const { storage, remote, publisher, path, visibility } = await setup(); await visibility('public');
+    remote.index.articles[0].updatedAt += 60_000;
+    await storage.saveNote(path, '# 古い端末の本文');
+    await expect(publisher.sync(storage)).rejects.toThrow('新しい公開版'); expect(remote.commits).toHaveLength(1);
+  });
+  it('公開先を更新する前にR2の新しい本文を取り込む', async () => {
+    const { storage, remote, publisher, path, visibility } = await setup(); await visibility('public');
+    const r2 = new SyncRemote(); storage.setRemote(r2); await storage.sync();
+    const other = new StorageManager(new Files(), r2); await other.initialize(); await other.sync(); other.setRemote(null);
+    await other.saveNote(path, '# 別端末の新しい本文'); other.setRemote(r2); await other.sync();
+    await publisher.sync(other); const count = remote.commits.length;
+    await publisher.sync(storage);
+    expect(await storage.readNote(path)).toBe('# 別端末の新しい本文'); expect(remote.commits).toHaveLength(count);
+  });
+  it('R2の同期に失敗したら公開を待ち、接続復帰後に再試行する', async () => {
+    const { storage, remote, publisher, path } = await setup();
+    await storage.setPublication(path, await publisher.intent(storage, path, 'public'));
+    const r2 = new SyncRemote(); const get = r2.get.bind(r2);
+    r2.get = async () => { throw new Error('offline'); }; storage.setRemote(r2);
+    await expect(publisher.sync(storage)).rejects.toThrow('端末間の同期'); expect(remote.commits).toHaveLength(0);
+    r2.get = get; await publisher.sync(storage); expect(remote.commits).toHaveLength(1);
+  });
+  it('R2から別端末の取り下げを先に取り込み、古い公開希望でエラーや再公開にしない', async () => {
+    const { storage, remote, publisher, path, visibility } = await setup(); await visibility('public');
+    const r2 = new SyncRemote(); storage.setRemote(r2); await storage.sync();
+    const other = new StorageManager(new Files(), r2); await other.initialize(); await other.sync();
+    await other.setPublication(path, await publisher.intent(other, path, 'private')); await publisher.sync(other);
+    await publisher.sync(storage);
+    expect((await storage.listNotes())[0].publication?.visibility).toBe('private');
+    expect(remote.index.articles).toHaveLength(0); expect(remote.commits).toHaveLength(2);
   });
   it('タイトル中の連続したピリオドも通常のファイル名として公開・取り下げできる', async () => {
     const { storage, remote, publisher, path } = await setup();

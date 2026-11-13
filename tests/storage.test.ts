@@ -160,6 +160,86 @@ describe('ローカル保存と差分同期', () => {
     const conflict = (await b.manager.listNotes()).find(note => note.path.includes('(conflict '));
     expect(await b.manager.readNote(conflict!.path)).toBe('offline draft');
   });
+  it('外部で削除した記事にも削除履歴を残し、再同期や再起動で復活させない', async () => {
+    const remote = new MemoryRemote(); const a = await setup(remote);
+    await a.manager.saveNote('note.md', 'base'); await a.manager.sync();
+    const b = await setup(remote); await b.manager.sync();
+    await a.backend.remove('note.md'); await a.manager.refresh(); await a.manager.sync();
+    await b.manager.sync();
+    expect(await a.manager.listNotes()).toHaveLength(0); expect(await b.manager.listNotes()).toHaveLength(0);
+    expect(parseManifest((await remote.get('_sync.json'))!.bytes).files['note.md'].deleted).toBe(true);
+    const restarted = new StorageManager(a.backend, remote); await restarted.initialize(); await restarted.sync();
+    expect(await restarted.readNote('note.md')).toBeNull();
+  });
+  it('削除済みの記事の実ファイルが残っていても、再索引で復活させず退避する', async () => {
+    const { manager, backend } = await setup(); await manager.saveNote('note.md', 'base');
+    await manager.deleteNote('note.md'); await backend.write('note.md', encode('base'));
+    const restarted = new StorageManager(backend); await restarted.initialize();
+    expect(await restarted.listNotes()).toHaveLength(0); expect(await backend.read('note.md')).toBeNull();
+    expect(parseManifest((await backend.read('_sync.json'))!).files['note.md'].deleted).toBe(true);
+    expect([...backend.files.entries()].some(([path, bytes]) => path.startsWith('.trash/deleted-') && decode(bytes) === 'base')).toBe(true);
+  });
+  it('ローカルの削除と別端末の編集が競合しても削除を維持し、編集内容だけを非公開のコピーに残す', async () => {
+    const remote = new MemoryRemote(); const a = await setup(remote);
+    await a.manager.saveNote('note.md', 'base');
+    await a.manager.setPublication('note.md', { repository: 'test/notes', branch: 'main', visibility: 'public', revision: crypto.randomUUID(), parent: null });
+    await a.manager.sync();
+    const b = await setup(remote); await b.manager.sync(); b.manager.setRemote(null);
+    await b.manager.deleteNote('note.md');
+    await a.manager.saveNote('note.md', 'other device edit'); await a.manager.sync();
+    b.manager.setRemote(remote); await b.manager.sync(); await a.manager.sync();
+    for (const { manager } of [a, b]) {
+      expect(await manager.readNote('note.md')).toBeNull();
+      const notes = await manager.listNotes(); expect(notes).toHaveLength(1); expect(notes[0].publication).toBeUndefined();
+      expect(await manager.readNote(notes[0].path)).toBe('other device edit');
+    }
+  });
+  it('削除が同期された後の明示的な復元は、別端末にも反映する', async () => {
+    const remote = new MemoryRemote(); const a = await setup(remote);
+    await a.manager.saveNote('note.md', 'base'); await a.manager.sync();
+    const b = await setup(remote); await b.manager.sync();
+    const backup = await a.manager.deleteNote('note.md'); await a.manager.sync(); await b.manager.sync();
+    await a.manager.restoreNote('note.md', backup); await a.manager.sync(); await b.manager.sync();
+    expect(await b.manager.readNote('note.md')).toBe('base');
+  });
+  it('内容が変わらない同期では一覧の再読み込みと公開同期を繰り返さない', async () => {
+    const remote = new MemoryRemote(); const { manager } = await setup(remote);
+    await manager.saveNote('note.md', 'base'); await manager.sync();
+    let changes = 0; manager.onChange(event => { if (event.type === 'files') changes++; });
+    await manager.sync(); await manager.sync(); expect(changes).toBe(0);
+  });
+  it('同じ内容のファイルはR2の更新日時に揃え、古い端末の日時で上書きしない', async () => {
+    const remote = new MemoryRemote(); const a = await setup(remote);
+    await a.manager.saveNote('note.md', 'same'); await a.manager.sync();
+    const before = (await remote.get('_sync.json'))!;
+    const backend = new MemoryFiles(); await backend.write('note.md', encode('same'));
+    backend.list = async () => [{ path: 'note.md', updatedAt: 1 }];
+    const other = new StorageManager(backend, remote); await other.initialize(); await other.sync();
+    expect((await other.listNotes())[0].updatedAt).toBe((await a.manager.listNotes())[0].updatedAt);
+    expect((await remote.get('_sync.json'))!.etag).toBe(before.etag);
+  });
+  it('削除を取り込んだ後で通信が切れても、一覧への変更通知を届ける', async () => {
+    const remote = new MemoryRemote(); const a = await setup(remote);
+    await a.manager.saveNote('deleted.md', 'base'); await a.manager.saveNote('changed.md', 'base'); await a.manager.sync();
+    const b = await setup(remote); await b.manager.sync();
+    a.manager.setRemote(null); await a.manager.deleteNote('deleted.md'); await a.manager.saveNote('changed.md', 'new');
+    a.manager.setRemote(remote); await a.manager.sync();
+    const get = remote.get.bind(remote);
+    remote.get = async path => { if (path !== '_sync.json') throw new Error('connection lost'); return get(path); };
+    let changes = 0; b.manager.onChange(event => { if (event.type === 'files') changes++; });
+    expect(await b.manager.sync()).toBe(false);
+    expect(await b.manager.readNote('deleted.md')).toBeNull(); expect(changes).toBeGreaterThan(0);
+  });
+  it.each([null, 'external edit'])('未同期ファイルが外部で変更された場合も、再試行を繰り返さず再索引する（%s）', async text => {
+    const { manager, backend } = await setup(); await manager.saveNote('note.md', 'draft');
+    if (text === null) await backend.remove('note.md'); else await backend.write('note.md', encode(text));
+    const remote = new MemoryRemote(); const get = remote.get.bind(remote); let reads = 0;
+    remote.get = async path => { if (++reads > 20) throw new Error('repeated stale snapshot'); return get(path); };
+    manager.setRemote(remote); expect(await manager.sync()).toBe(true);
+    const entry = parseManifest((await remote.get('_sync.json'))!.bytes).files['note.md'];
+    if (text === null) { expect(entry.deleted).toBe(true); expect(await manager.listNotes()).toHaveLength(0); }
+    else { expect(entry.sha256).toBe(await sha256(encode(text))); expect(decode((await remote.get('note.md'))!.bytes)).toBe(text); }
+  });
   it('IndexedDB の文章とバイナリが別インスタンスからも読める', async () => {
     const a = new BrowserBackend();
     await a.write('persistent.md', encode('persistent'));

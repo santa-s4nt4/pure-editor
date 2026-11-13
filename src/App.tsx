@@ -132,7 +132,12 @@ export default function App(props: { initialArticle?: string } = {}) {
     try { localStorage.setItem(journalKey(activePath()), text); }
     catch { report('一時保存領域がいっぱいです。⌘ S で保存してください。'); }
   };
-  async function reloadNotes() { if (!disposed) setNotes(await storage.listNotes()); }
+  let notesReload = 0;
+  async function reloadNotes() {
+    const request = ++notesReload; const current = storage;
+    const next = await current.listNotes();
+    if (!disposed && request === notesReload && current === storage) setNotes(next);
+  }
   function bindStorage(manager: StorageManager) {
     unlistenStorage?.();
     storage = manager;

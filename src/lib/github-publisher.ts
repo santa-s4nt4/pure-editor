@@ -112,6 +112,9 @@ export class ArticlePublisher {
     const next = this.running.catch(() => undefined).then(async () => {
       do {
         this.again = false;
+        // R2 is the source for cross-device edits and withdrawals. Never publish
+        // a stale local snapshot while that synchronization is still in flight.
+        if (!await storage.sync()) throw new Error('端末間の同期が完了していないため、公開先の更新を待っています。R2 の接続状態を確認してください。');
         const errors: string[] = [];
         const notes = (await storage.listNotes()).filter(note => note.publication && targetKey(note.publication.repository, note.publication.branch) === targetKey(this.remote.repository, this.remote.branch));
         if (!notes.length) return;
@@ -144,7 +147,6 @@ export class ArticlePublisher {
     const changes: Change[] = [];
     const assets = new Map<string, Uint8Array>();
     if (publication.visibility === 'public') {
-      if (prior && prior.revision === publication.revision && prior.updatedAt > note.updatedAt) throw new Error(`「${note.title}」には新しい公開版があります。端末間の同期を確認してください。`);
       const paths = new Set<string>();
       mapImagePaths(document.body, path => { if (!/^https?:\/\//i.test(path)) paths.add(path); return path; });
       const mapped = new Map<string, string>();
@@ -160,7 +162,10 @@ export class ArticlePublisher {
       const markdownPath = `posts/${note.path.split('/').at(-1)!}`;
       const editorBody = fromMarkdown(document.body);
       const post: PublishedArticle = { id, title: noteTitle(editorBody, note.title), tags: extractTags(editorBody), excerpt: fromMarkdown(document.body).replace(/^#+\s+/gm, '').replace(/\n/g, ' ').slice(0, 160), updatedAt: note.updatedAt, markdownPath, assets: [...assets.keys()].sort(), contentHash: await sha256(encode(body)), revision: publication.revision };
-      if (prior && JSON.stringify(prior) === JSON.stringify(post)) return;
+      // File dates can differ after a restore or migration. Identical public
+      // content is already synchronized regardless of those dates.
+      if (prior && prior.revision === post.revision && prior.contentHash === post.contentHash && prior.markdownPath === post.markdownPath && prior.title === post.title && prior.excerpt === post.excerpt && JSON.stringify(prior.tags) === JSON.stringify(post.tags) && JSON.stringify(prior.assets) === JSON.stringify(post.assets)) return;
+      if (prior && prior.revision === publication.revision && prior.updatedAt > note.updatedAt) throw new Error(`「${note.title}」には新しい公開版があります。端末間の同期を確認してください。`);
       index.articles = [...index.articles.filter(item => item.id !== id), post].sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id));
       changes.push({ path: markdownPath, bytes: encode(body) });
       for (const [path, bytes] of assets) if (!snapshot.files.has(path)) changes.push({ path, bytes });

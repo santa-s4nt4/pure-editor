@@ -278,7 +278,7 @@ export class StorageManager {
   get renamedPaths() { return { ...this.aliases }; }
   private bases: Record<string, string> = Object.create(null);
   private queue: Promise<unknown> = Promise.resolve();
-  private running: Promise<void> | null = null;
+  private running: Promise<boolean> | null = null;
   private syncAgain = false;
   private listeners = new Set<(event: StorageEvent) => void>();
   private titlePaths = new Map<string, string>();
@@ -323,13 +323,21 @@ export class StorageManager {
   async refresh() {
     await this.exclusive(async () => {
       const next = emptyManifest();
-      for (const [path, entry] of Object.entries(this.manifest.files)) if (entry.deleted) next.files[path] = entry;
+      // Missing files are deletions too; dropping their entries would pull them
+      // back from R2 on the next sync.
+      for (const [path, entry] of Object.entries(this.manifest.files)) next.files[path] = entry.deleted ? entry : { ...entry, updatedAt: Date.now(), deleted: true };
       for (const file of await this.backend.list()) {
         const bytes = await this.backend.read(file.path);
         if (!bytes) continue;
-        const hash = await sha256(bytes);
         const previous = this.manifest.files[file.path];
-        next.files[file.path] = { sha256: hash, updatedAt: previous?.sha256 === hash && !previous.deleted ? previous.updatedAt : file.updatedAt };
+        if (previous?.deleted) {
+          // A leftover file after an interrupted delete/rename is not a restore.
+          await this.backend.write(`.trash/deleted-${crypto.randomUUID()}/${file.path}`, bytes);
+          await this.backend.remove(file.path);
+          continue;
+        }
+        const hash = await sha256(bytes);
+        next.files[file.path] = { sha256: hash, updatedAt: previous?.sha256 === hash ? previous.updatedAt : file.updatedAt };
       }
       this.manifest = next;
       await this.persistIndex();
@@ -565,8 +573,8 @@ export class StorageManager {
   }
   setRemote(remote: RemoteBackend | null) { this.remote = remote; }
   async waitForSync() { await this.running; }
-  sync(): Promise<void> {
-    if (!this.remote) return Promise.resolve();
+  sync(): Promise<boolean> {
+    if (!this.remote) return Promise.resolve(true);
     if (this.running) { this.syncAgain = true; return this.running; }
     this.emit({ type: 'sync', state: 'syncing' });
     this.running = (async () => {
@@ -585,8 +593,10 @@ export class StorageManager {
           } while (this.syncAgain && this.remote);
         });
         this.emit({ type: 'sync', state: 'idle' });
+        return true;
       } catch (error) {
         this.emit({ type: 'sync', state: navigator.onLine ? 'error' : 'offline', message: error instanceof Error ? error.message : '同期を完了できませんでした。' });
+        return false;
       } finally { this.running = null; }
     })();
     return this.running;
@@ -595,73 +605,103 @@ export class StorageManager {
     const index = await remote.get('_sync.json');
     const remoteManifest = index ? parseManifest(index.bytes) : emptyManifest();
     const pulled = new Set<string>();
-    // まず Pull。両方で変わった場合はローカル版を別ファイルとして残す。
-    for (const [path, entry] of Object.entries(remoteManifest.files)) {
-      await this.queue;
-      const local = this.manifest.files[path];
-      if (fingerprint(local) === fingerprint(entry) || (local && this.bases[path] === fingerprint(entry))) continue;
-      if (entry.deleted) {
+    let changed = false;
+    try {
+      // まず Pull。両方で変わった場合はローカル版を別ファイルとして残す。
+      for (const [path, entry] of Object.entries(remoteManifest.files)) {
+        await this.queue;
+        const local = this.manifest.files[path];
+        if (local && fingerprint(local) === fingerprint(entry)) {
+          if (local.updatedAt !== entry.updatedAt) await this.exclusive(async () => {
+            if (fingerprint(this.manifest.files[path]) !== fingerprint(entry)) return;
+            // The same content has one shared edit date. Otherwise each device
+            // would keep replacing the index with its own filesystem date.
+            this.manifest.files[path] = entry;
+            await this.persistIndex(); changed = true;
+          });
+          continue;
+        }
+        if (local && this.bases[path] === fingerprint(entry)) continue;
+        if (entry.deleted) {
+          await this.exclusive(async () => {
+            const current = this.manifest.files[path];
+            const bytes = await this.backend.read(path);
+            if (bytes && current && fingerprint(current) !== this.bases[path]) {
+              const extension = path.endsWith('.md') ? '.md' : '.webp';
+              await this.writeIndexed(`${path.slice(0, -extension.length)} (conflict ${Date.now()}-${crypto.randomUUID().slice(0, 6)})${extension}`, extension === '.md' ? encoder.encode(publicationDocument(decoder.decode(bytes)).body) : bytes);
+            }
+            if (bytes) {
+              await this.backend.write(`.trash/${Date.now()}-${crypto.randomUUID()}/${path}`, bytes);
+              await this.backend.remove(path);
+            }
+            this.manifest.files[path] = entry; this.bases[path] = fingerprint(entry); await this.persistIndex();
+            changed = true;
+          });
+          continue;
+        }
+        const object = await remote.get(`_pure/objects/${entry.sha256}`) ?? await remote.get(path);
+        if (!object || await sha256(object.bytes) !== entry.sha256) throw new SyncConflict();
         await this.exclusive(async () => {
           const current = this.manifest.files[path];
-          const bytes = await this.backend.read(path);
-          if (bytes && current && fingerprint(current) !== this.bases[path]) {
-            const extension = path.endsWith('.md') ? '.md' : '.webp';
-            await this.writeIndexed(`${path.slice(0, -extension.length)} (conflict ${Date.now()}-${crypto.randomUUID().slice(0, 6)})${extension}`, extension === '.md' ? encoder.encode(publicationDocument(decoder.decode(bytes)).body) : bytes);
-          }
-          if (bytes) {
-            await this.backend.write(`.trash/${Date.now()}-${crypto.randomUUID()}/${path}`, bytes);
-            await this.backend.remove(path);
-          }
-          this.manifest.files[path] = entry; this.bases[path] = fingerprint(entry); await this.persistIndex();
-        });
-        continue;
-      }
-      const object = await remote.get(`_pure/objects/${entry.sha256}`) ?? await remote.get(path);
-      if (!object || await sha256(object.bytes) !== entry.sha256) throw new SyncConflict();
-      await this.exclusive(async () => {
-        const current = this.manifest.files[path];
-        if (fingerprint(current) === fingerprint(entry)) return;
-        if (current && !current.deleted && fingerprint(current) !== this.bases[path]) {
-          const bytes = await this.backend.read(path);
-          if (bytes) {
+          if (fingerprint(current) === fingerprint(entry)) return;
+          if (current?.deleted && fingerprint(current) !== this.bases[path]) {
+            // Keep a pending local deletion even when another device edited the
+            // old version. Preserve that edit without restoring or publishing it.
             const extension = path.endsWith('.md') ? '.md' : '.webp';
             const conflict = `${path.slice(0, -extension.length)} (conflict ${Date.now()}-${crypto.randomUUID().slice(0, 6)})${extension}`;
-            await this.writeIndexed(conflict, extension === '.md' ? encoder.encode(publicationDocument(decoder.decode(bytes)).body) : bytes);
+            await this.writeIndexed(conflict, extension === '.md' ? encoder.encode(publicationDocument(decoder.decode(object.bytes)).body) : object.bytes);
+            this.bases[path] = fingerprint(entry);
+            await this.persistIndex(); changed = true;
+            return;
           }
+          if (current && !current.deleted && fingerprint(current) !== this.bases[path]) {
+            const bytes = await this.backend.read(path);
+            if (bytes) {
+              const extension = path.endsWith('.md') ? '.md' : '.webp';
+              const conflict = `${path.slice(0, -extension.length)} (conflict ${Date.now()}-${crypto.randomUUID().slice(0, 6)})${extension}`;
+              await this.writeIndexed(conflict, extension === '.md' ? encoder.encode(publicationDocument(decoder.decode(bytes)).body) : bytes);
+            }
+          }
+          await this.writeIndexed(path, object.bytes, entry);
+          pulled.add(path);
+          this.bases[path] = fingerprint(entry);
+          await this.persistIndex();
+          changed = true;
+        });
+      }
+      await this.queue;
+      const snapshot: Manifest = structuredClone(this.manifest);
+      const merged: Manifest = { version: 1, files: { ...remoteManifest.files } };
+      // 各オブジェクトにも条件付き PUT を行い、他端末の文章の上書きを防ぐ。
+      for (const [path, entry] of Object.entries(snapshot.files)) {
+        if (entry.deleted) { merged.files[path] = entry; continue; }
+        if (fingerprint(remoteManifest.files[path]) !== fingerprint(entry) || pulled.has(path)) {
+          const bytes = await this.backend.read(path);
+          if (!bytes || await sha256(bytes) !== entry.sha256) {
+            // External edits/deletions do not update the manifest themselves.
+            // Reindex before retrying so the same stale entry cannot loop forever.
+            await this.refresh(); this.syncAgain = true; continue;
+          }
+          // 不変の内容を先に置くことで、文章 PUT とインデックス PUT の間の
+          // 終了・並行書込みでも、確定したインデックスの内容を必ず取得できる。
+          const revision = `_pure/objects/${entry.sha256}`;
+          const archived = await remote.get(revision);
+          if (!archived) {
+            try { await remote.put(revision, bytes, null); }
+            catch (error) { if (!(error instanceof SyncConflict)) throw error; }
+          } else if (await sha256(archived.bytes) !== entry.sha256) throw new Error('R2 の保存内容を検証できませんでした。');
+          const previous = await remote.get(path);
+          await remote.put(path, bytes, previous?.etag ?? null);
         }
-        await this.writeIndexed(path, object.bytes, entry);
-        pulled.add(path);
-        this.bases[path] = fingerprint(entry);
+        merged.files[path] = entry;
+      }
+      if (JSON.stringify(merged.files) !== JSON.stringify(remoteManifest.files)) await remote.put('_sync.json', encoder.encode(JSON.stringify(merged, null, 2)), index?.etag ?? null);
+      await this.exclusive(async () => {
+        for (const [path, entry] of Object.entries(merged.files)) this.bases[path] = fingerprint(entry);
         await this.persistIndex();
       });
+    } finally {
+      if (changed) this.emit({ type: 'files' });
     }
-    await this.queue;
-    const snapshot: Manifest = structuredClone(this.manifest);
-    const merged: Manifest = { version: 1, files: { ...remoteManifest.files } };
-    // 各オブジェクトにも条件付き PUT を行い、他端末の文章の上書きを防ぐ。
-    for (const [path, entry] of Object.entries(snapshot.files)) {
-      if (entry.deleted) { merged.files[path] = entry; continue; }
-      if (fingerprint(remoteManifest.files[path]) !== fingerprint(entry) || pulled.has(path)) {
-        const bytes = await this.backend.read(path);
-        if (!bytes || await sha256(bytes) !== entry.sha256) { this.syncAgain = true; continue; }
-        // 不変の内容を先に置くことで、文章 PUT とインデックス PUT の間の
-        // 終了・並行書込みでも、確定したインデックスの内容を必ず取得できる。
-        const revision = `_pure/objects/${entry.sha256}`;
-        const archived = await remote.get(revision);
-        if (!archived) {
-          try { await remote.put(revision, bytes, null); }
-          catch (error) { if (!(error instanceof SyncConflict)) throw error; }
-        } else if (await sha256(archived.bytes) !== entry.sha256) throw new Error('R2 の保存内容を検証できませんでした。');
-        const previous = await remote.get(path);
-        await remote.put(path, bytes, previous?.etag ?? null);
-      }
-      merged.files[path] = entry;
-    }
-    if (JSON.stringify(merged.files) !== JSON.stringify(remoteManifest.files)) await remote.put('_sync.json', encoder.encode(JSON.stringify(merged, null, 2)), index?.etag ?? null);
-    await this.exclusive(async () => {
-      for (const [path, entry] of Object.entries(merged.files)) this.bases[path] = fingerprint(entry);
-      await this.persistIndex();
-    });
-    this.emit({ type: 'files' });
   }
 }
