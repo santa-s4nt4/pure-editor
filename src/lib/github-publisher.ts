@@ -164,8 +164,8 @@ export class ArticlePublisher {
       const post: PublishedArticle = { id, title: noteTitle(editorBody, note.title), tags: extractTags(editorBody), excerpt: fromMarkdown(document.body).replace(/^#+\s+/gm, '').replace(/\n/g, ' ').slice(0, 160), updatedAt: note.updatedAt, markdownPath, assets: [...assets.keys()].sort(), contentHash: await sha256(encode(body)), revision: publication.revision };
       // File dates can differ after a restore or migration. Identical public
       // content is already synchronized regardless of those dates.
-      if (prior && prior.revision === post.revision && prior.contentHash === post.contentHash && prior.markdownPath === post.markdownPath && prior.title === post.title && prior.excerpt === post.excerpt && JSON.stringify(prior.tags) === JSON.stringify(post.tags) && JSON.stringify(prior.assets) === JSON.stringify(post.assets)) return;
-      if (prior && prior.revision === publication.revision && prior.updatedAt > note.updatedAt) throw new Error(`「${note.title}」には新しい公開版があります。端末間の同期を確認してください。`);
+      if (prior && prior.revision === post.revision && prior.contentHash === post.contentHash && prior.markdownPath.normalize('NFC') === post.markdownPath.normalize('NFC') && prior.title === post.title && prior.excerpt === post.excerpt && JSON.stringify(prior.tags) === JSON.stringify(post.tags) && JSON.stringify(prior.assets) === JSON.stringify(post.assets)) return;
+      if (prior && prior.revision === publication.revision && prior.contentHash !== post.contentHash && prior.updatedAt > note.updatedAt) throw new Error(`「${note.title}」には新しい公開版があります。端末間の同期を確認してください。`);
       index.articles = [...index.articles.filter(item => item.id !== id), post].sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id));
       changes.push({ path: markdownPath, bytes: encode(body) });
       for (const [path, bytes] of assets) if (!snapshot.files.has(path)) changes.push({ path, bytes });

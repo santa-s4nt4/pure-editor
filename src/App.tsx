@@ -299,7 +299,12 @@ export default function App(props: { initialArticle?: string } = {}) {
       await flush();
       const text = await storage.readNote(path);
       path = storage.resolvePath(path);
-      if (text === null) throw new Error('ノートが見つかりません。');
+      if (text === null) {
+        await reloadNotes(); closePalette();
+        if (!editor) await goHome();
+        report('この記事は削除または移動されています。一覧を更新しました。');
+        return;
+      }
       if (!restore) history.push({ kind: 'note', path }, currentVisit());
       clearOutline?.(); clearOutline = undefined; editor?.destroy();
       setSwipedRow(null); setHome(false);
@@ -802,7 +807,7 @@ export default function App(props: { initialArticle?: string } = {}) {
     window.addEventListener('pagehide', pagehide);
     window.addEventListener('online', online);
     window.addEventListener('focus', online);
-    const retry = setInterval(() => { if (ready() && document.visibilityState === 'visible' && navigator.onLine) { void storage.sync(); void paperNotebook?.sync(); void syncPublished().catch(() => undefined); } }, 60_000);
+    const retry = setInterval(() => { if (ready() && document.visibilityState === 'visible' && navigator.onLine) void refreshFromDisk(); }, 60_000);
     onCleanup(() => {
       disposed = true; clearTimeout(hintTimer); clearTimeout(clickTimer); clearTimeout(timer); clearTimeout(toastTimer); clearInterval(retry);
       clearTimeout(sharedTimer); workspace?.close();

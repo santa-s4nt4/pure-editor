@@ -19,6 +19,13 @@ async function windows() {
 }
 
 describe('複数ウィンドウの保存', () => {
+  it('別ウィンドウの削除後は、キャッシュを持つ一覧も通知や手動更新なしに実体を確認する', async () => {
+    const { a, b } = await windows(); const path = await a.createNote('削除する記事');
+    await a.saveNote(path, '# 削除する記事'); await b.reloadSharedState();
+    expect(await b.listNotes()).toHaveLength(1);
+    await a.deleteNote(path);
+    expect(await b.listNotes()).toHaveLength(0); expect(await b.readNote(path)).toBeNull();
+  });
   it('別の記事を同時に保存しても同期インデックスから記事を落とさない', async () => {
     const { a, b, files } = await windows();
     const [first, second] = await Promise.all([a.createNote('A'), b.createNote('B')]);

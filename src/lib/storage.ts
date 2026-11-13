@@ -272,7 +272,19 @@ export class StorageManager {
   private aliases: Record<string, string> = Object.create(null);
   resolvePath(path: string): string {
     const seen = new Set<string>();
-    while (this.aliases[path] && !seen.has(path)) { seen.add(path); path = this.aliases[path]; }
+    while (!seen.has(path.normalize('NFC'))) {
+      const next = this.aliases[path] ?? Object.entries(this.aliases).find(([from]) => from.normalize('NFC') === path.normalize('NFC'))?.[1];
+      if (!next) break;
+      seen.add(path.normalize('NFC')); path = next;
+    }
+    const active = Object.entries(this.manifest.files).filter(([, entry]) => !entry.deleted).map(([name]) => name);
+    const equivalent = active.find(name => name.normalize('NFC') === path.normalize('NFC'));
+    if (equivalent) return equivalent;
+    // Rename maps are local to a device. A rename received through R2 can leave
+    // an old link/history entry behind; the stable note ID still identifies it.
+    const id = noteId(path);
+    const matches = id ? active.filter(name => noteId(name) === id) : [];
+    if (matches.length === 1) return matches[0];
     return path;
   }
   get renamedPaths() { return { ...this.aliases }; }
@@ -327,17 +339,21 @@ export class StorageManager {
       // back from R2 on the next sync.
       for (const [path, entry] of Object.entries(this.manifest.files)) next.files[path] = entry.deleted ? entry : { ...entry, updatedAt: Date.now(), deleted: true };
       for (const file of await this.backend.list()) {
-        const bytes = await this.backend.read(file.path);
+        // macOS/iOS may enumerate the same filename with different Unicode
+        // composition. Keep the existing live key instead of deleting/readding it.
+        const equivalent = Object.keys(this.manifest.files).find(path => !this.manifest.files[path].deleted && path.normalize('NFC') === file.path.normalize('NFC'));
+        const path = equivalent ?? file.path;
+        const bytes = await this.backend.read(path);
         if (!bytes) continue;
-        const previous = this.manifest.files[file.path];
+        const previous = this.manifest.files[path];
         if (previous?.deleted) {
           // A leftover file after an interrupted delete/rename is not a restore.
-          await this.backend.write(`.trash/deleted-${crypto.randomUUID()}/${file.path}`, bytes);
-          await this.backend.remove(file.path);
+          await this.backend.write(`.trash/deleted-${crypto.randomUUID()}/${path}`, bytes);
+          await this.backend.remove(path);
           continue;
         }
         const hash = await sha256(bytes);
-        next.files[file.path] = { sha256: hash, updatedAt: previous?.sha256 === hash ? previous.updatedAt : file.updatedAt };
+        next.files[path] = { sha256: hash, updatedAt: previous?.sha256 === hash ? previous.updatedAt : file.updatedAt };
       }
       this.manifest = next;
       await this.persistIndex();
@@ -345,18 +361,31 @@ export class StorageManager {
     this.emit({ type: 'files' });
   }
   async listNotes(): Promise<Note[]> {
-    await this.queue;
     const notes: Note[] = [];
-    for (const [path, entry] of Object.entries(this.manifest.files)) {
-      if (!path.endsWith('.md') || entry.deleted) continue;
-      const cached = this.noteCache.get(path);
-      if (cached?.hash === entry.sha256 && cached.note.updatedAt === entry.updatedAt) { notes.push(cached.note); continue; }
-      const bytes = await this.backend.read(path);
-      if (!bytes) continue;
-      const document = publicationDocument(decoder.decode(bytes));
-      const text = fromMarkdown(document.body);
-      const note = { publication: document.publication, path, title: noteTitle(text, filenameTitle(path)), tags: extractTags(text), excerpt: text.replace(/^#+\s+/gm, '').replace(/\n/g, ' ').slice(0, 100), updatedAt: entry.updatedAt };
-      this.noteCache.set(path, { hash: entry.sha256, note }); notes.push(note);
+    // Hold the workspace lock while validating the snapshot, including cache
+    // hits. A cached title is not evidence that its file still exists.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      notes.length = 0;
+      const repair = await this.exclusive(async () => {
+        let stale = false;
+        for (const [path, entry] of Object.entries(this.manifest.files)) {
+          if (!path.endsWith('.md') || entry.deleted) continue;
+          const bytes = await this.backend.read(path);
+          if (!bytes) { this.noteCache.delete(path); stale = true; continue; }
+          const hash = await sha256(bytes);
+          if (hash !== entry.sha256) stale = true;
+          const cached = this.noteCache.get(path);
+          if (cached?.hash === hash && cached.note.updatedAt === entry.updatedAt) { notes.push(cached.note); continue; }
+          const document = publicationDocument(decoder.decode(bytes));
+          const text = fromMarkdown(document.body);
+          const note = { publication: document.publication, path, title: noteTitle(text, filenameTitle(path)), tags: extractTags(text), excerpt: text.replace(/^#+\s+/gm, '').replace(/\n/g, ' ').slice(0, 100), updatedAt: entry.updatedAt };
+          this.noteCache.set(path, { hash, note }); notes.push(note);
+        }
+        return stale;
+      });
+      if (!repair || attempt > 0) break;
+      await this.refresh();
+      void this.sync();
     }
     if (this.paper) notes.push(...await this.paper.listNotes());
     notes.sort((a, b) => b.updatedAt - a.updatedAt || a.path.localeCompare(b.path, 'ja'));
@@ -366,11 +395,12 @@ export class StorageManager {
   private editorText(text: string) { return fromMarkdown(publicationDocument(text).body, (label, path) => this.titlePaths.get(label) === this.resolvePath(path)); }
   async readNote(path: string) {
     if (isPaperPath(path)) return this.paper?.readNote(path) ?? null;
-    if (this.backend.coordinationKey) await this.reloadSharedState();
-    await this.queue;
-    path = this.resolvePath(path);
     await this.listNotes();
-    const bytes = await this.backend.read(safeRelativePath(path));
+    const bytes = await this.exclusive(async () => {
+      path = this.resolvePath(path);
+      if (this.manifest.files[path]?.deleted) return null;
+      return this.backend.read(safeRelativePath(path));
+    });
     return bytes ? this.editorText(decoder.decode(bytes)) : null;
   }
   async deleteNote(path: string): Promise<string> {
@@ -393,7 +423,7 @@ export class StorageManager {
   async restoreNote(path: string, backup: string) {
     const bytes = await this.backend.read(backup);
     if (!bytes) throw new Error('復元する記事が見つかりません。');
-    if (await this.backend.read(path)) throw new Error('同名の記事があるため復元できません。');
+    if (await this.backend.read(this.resolvePath(path))) throw new Error('同名の記事があるため復元できません。');
     const document = publicationDocument(decoder.decode(bytes));
     const publication = document.publication ? { ...document.publication, visibility: 'private' as const, parent: document.publication.revision, revision: crypto.randomUUID() } : undefined;
     await this.saveBytes(path, encoder.encode(withPublication(normalizeMarkdownLayout(document.body), publication)));

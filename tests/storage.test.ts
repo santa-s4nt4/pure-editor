@@ -31,6 +31,39 @@ async function setup(remote: RemoteBackend | null = null) {
 }
 
 describe('ローカル保存と差分同期', () => {
+  it('キャッシュ済みの記事も実ファイルが消えたら一覧から除き、削除履歴を修復する', async () => {
+    const { manager, backend } = await setup(); await manager.saveNote('note.md', '# 記事');
+    expect(await manager.listNotes()).toHaveLength(1);
+    await backend.remove('note.md');
+    expect(await manager.listNotes()).toHaveLength(0);
+    expect(await manager.readNote('note.md')).toBeNull();
+    expect(parseManifest((await backend.read('_sync.json'))!).files['note.md'].deleted).toBe(true);
+  });
+  it('キャッシュ後の外部編集も本文・タイトル・同期ハッシュに反映する', async () => {
+    const { manager, backend } = await setup(); await manager.saveNote('note.md', '# 古い記事');
+    await manager.listNotes(); await backend.write('note.md', encode('# 最新の記事'));
+    expect((await manager.listNotes())[0].title).toBe('最新の記事');
+    expect(parseManifest((await backend.read('_sync.json'))!).files['note.md'].sha256).toBe(await sha256(encode('# 最新の記事')));
+  });
+  it('別端末から届いた改名はローカルの改名表がなくても、同じIDで旧パスから開ける', async () => {
+    const remote = new MemoryRemote(); const a = await setup(remote);
+    const path = await a.manager.createNote('旧タイトル'); await a.manager.saveNote(path, '# 旧タイトル'); await a.manager.sync();
+    const b = await setup(remote); await b.manager.sync(); await b.manager.listNotes();
+    const renamed = await a.manager.saveNamedNote(path, '# 新タイトル'); await a.manager.sync(); await b.manager.sync();
+    expect(b.manager.resolvePath(path)).toBe(renamed);
+    expect(await b.manager.readNote(path)).toBe('# 新タイトル');
+    expect((await b.manager.listNotes()).map(note => note.path)).toEqual([renamed]);
+  });
+  it('ファイル名がNFDで列挙されてもNFCの索引を削除済みにせず、同じ記事として開く', async () => {
+    const { manager, backend } = await setup(); const path = await manager.createNote('デザイン');
+    await manager.saveNote(path, '# デザイン'); await manager.listNotes();
+    const list = backend.list.bind(backend);
+    backend.list = async () => (await list()).map(file => ({ ...file, path: file.path.normalize('NFD') }));
+    await manager.refresh(); await manager.refresh();
+    expect((await manager.listNotes()).map(note => note.path)).toEqual([path]);
+    expect(await manager.readNote(path.normalize('NFD'))).toBe('# デザイン');
+    expect(parseManifest((await backend.read('_sync.json'))!).files[path].deleted).toBeUndefined();
+  });
   it('既存ファイルを整形した後は R2 も修正し、書式の変更だけで競合コピーを作らない', async () => {
     const remote = new MemoryRemote(); const a = await setup(remote);
     await a.backend.write('note.md', encode('# note\n\n- item\n2025.1')); await a.manager.refresh(); await a.manager.sync();

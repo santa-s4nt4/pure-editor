@@ -133,6 +133,31 @@ test('Cmd N ですぐに新規記事、Cmd Shift Delete で削除して復元で
   await expect(editor).toContainText('すぐに書く');
 });
 
+test('一覧を表示した後に実ファイルが消えても、開く際に一覧を修復して見つからないエラーを出さない', async ({ page, isMobile }) => {
+  await newNote(page, isMobile, '外部で消えた記事');
+  await page.getByRole('textbox', { name: 'ノート本文' }).press('Meta+s');
+  await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
+  await expect(page.getByRole('button', { name: '外部で消えた記事', exact: true })).toBeVisible();
+  await page.evaluate(async () => {
+    const modulePath = '/src/lib/storage.ts'; const { StorageManager } = await import(modulePath);
+    const read = StorageManager.prototype.readNote;
+    StorageManager.prototype.readNote = async function (path: string) {
+      if (path.startsWith('外部で消えた記事--')) {
+        // Delete exactly between activating the visible row and reading it.
+        StorageManager.prototype.readNote = read;
+        await this.backend.remove(path);
+      }
+      return read.call(this, path);
+    };
+  });
+  await page.getByRole('button', { name: '外部で消えた記事', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('一覧を更新しました');
+  await expect(page.getByRole('status')).not.toContainText('Error:');
+  await expect(page.getByRole('button', { name: '外部で消えた記事', exact: true })).toHaveCount(0);
+  await page.reload(); await expect(page.locator('.writing-surface')).toHaveAttribute('aria-busy', 'false');
+  await expect(page.getByRole('button', { name: '外部で消えた記事', exact: true })).toHaveCount(0);
+});
+
 test('削除前に始まった一覧の読み込みが遅れても、削除済みの記事を再表示しない', async ({ page, isMobile }) => {
   await newNote(page, isMobile, '一覧更新中に削除');
   await page.getByRole('textbox', { name: 'ノート本文' }).press('Meta+s');

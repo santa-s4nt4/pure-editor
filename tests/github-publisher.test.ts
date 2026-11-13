@@ -83,6 +83,25 @@ describe('GitHub 記事公開', () => {
     remote.index.articles[0].updatedAt += 60_000;
     await publisher.sync(storage); expect(remote.commits).toHaveLength(1);
   });
+  it('実際に発生したNFC/NFDのファイル名差と古い編集日時でも同一の公開本文は同期済みとする', async () => {
+    const { storage, remote, publisher, path } = await setup();
+    const renamed = await storage.saveNamedNote(path, '# アモーダル補完を使ったデザインツール あ！もーだる\n\n[technique]\n本文');
+    await storage.setPublication(renamed, await publisher.intent(storage, renamed, 'public')); await publisher.sync(storage);
+    const post = remote.index.articles[0]; const old = post.markdownPath;
+    post.markdownPath = old.normalize('NFD'); post.updatedAt += 600_000;
+    remote.files.set(post.markdownPath, remote.files.get(old)!); remote.files.delete(old);
+    // Use a fresh publisher as well: recovery must not depend on a process cache.
+    await new ArticlePublisher(remote).sync(storage);
+    expect(remote.commits).toHaveLength(1);
+  });
+  it('同じ本文の改名だけなら公開側の日付が新しくても移動を反映できる', async () => {
+    const { storage, remote, publisher, path, visibility } = await setup(); await visibility('public');
+    const post = remote.index.articles[0]; const old = post.markdownPath;
+    post.markdownPath = `posts/古いファイル名--${post.id}.md`; post.updatedAt += 600_000;
+    remote.files.set(post.markdownPath, remote.files.get(old)!); remote.files.delete(old);
+    await publisher.sync(storage);
+    expect(remote.index.articles[0].markdownPath).toBe(`posts/${path}`); expect(remote.commits).toHaveLength(2);
+  });
   it('本文が異なる古い記事では、新しい公開版の上書きを防ぐ', async () => {
     const { storage, remote, publisher, path, visibility } = await setup(); await visibility('public');
     remote.index.articles[0].updatedAt += 60_000;
